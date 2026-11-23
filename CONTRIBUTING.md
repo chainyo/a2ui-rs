@@ -2,7 +2,14 @@
 
 ## Setup
 
-Install Rust through rustup. The exact build toolchain is in `rust-toolchain.toml`.
+Install Git. Install Rust through rustup. The exact Rust toolchain is in `rust-toolchain.toml`.
+Initialize the pinned upstream references:
+
+```sh
+git submodule update --init
+```
+
+For a new checkout, `git clone --recurse-submodules` initializes them during the clone.
 Install cargo-deny `0.20.2`:
 
 ```sh
@@ -14,6 +21,7 @@ The Hawk `0.1.9` installer is optional:
 ```sh
 ./scripts/install-hawk.sh
 ```
+
 Keep the toolchain and Hawk versions compatible when updating either.
 
 Read the [crate map](crates/README.md), [architecture](docs/architecture.md), and [conformance policy](docs/conformance.md) before structural changes.
@@ -36,7 +44,7 @@ shellcheck scripts/install-hawk.sh
 actionlint
 ```
 
-CI runs the Rust tests on Linux, macOS, and Windows.
+CI initializes the pinned submodule and runs the Rust tests on Linux, macOS, and Windows.
 CI runs the full quality checks on Linux.
 Hawk remains available through the pinned installer.
 CI does not run Hawk because this workspace contains only an external library.
@@ -52,14 +60,14 @@ Tests must exercise production APIs instead of a test-only protocol implementati
 The bootstrap version tests inspect message versions only.
 They do not validate the complete local or upstream message payloads.
 
-Imported upstream references retain their original bytes and license notices.
-Update them only through the process in `docs/conformance.md`.
+Upstream references live in a Git submodule. Do not edit its files.
+Update the pin only through the process in `docs/conformance.md`.
 Do not replace negative expectations with successful examples.
 
 ## Dependencies
 
 The public Core SDK depends on Serde and `thiserror` 2.
-Keep YAML parsing and reference hashing in dev-dependencies for integration tests.
+Keep YAML parsing in dev-dependencies for integration tests.
 Prefer maintained stable releases. Disable unnecessary default features.
 Commit `Cargo.lock` and review license, source, advisory, and duplicate-version checks.
 Use a scoped update when changing a dependency:

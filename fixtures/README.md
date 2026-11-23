@@ -4,8 +4,9 @@
 The contact example covers create, component update, data update, and surface deletion.
 The bootstrap reads only its version fields. It does not process its lifecycle.
 
-`upstream/` contains unchanged upstream reference files.
-The manifest records the upstream revision and SHA-256 checksums.
-Read [the conformance policy](../docs/conformance.md) before adding or updating references.
+`upstream/` is the official A2UI repository as a pinned Git submodule.
+Initialize it with `git submodule update --init` before running tests.
+Read [the conformance policy](../docs/conformance.md) before updating the pin.
+Do not edit files inside the upstream checkout.
 
 Do not add credentials, personal records, private endpoints, or production payloads.

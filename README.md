@@ -16,6 +16,7 @@ The runtime and upstream behavioral conformance tests are pending. No crates are
 Install [rustup](https://rustup.rs/). The toolchain is pinned in `rust-toolchain.toml`.
 
 ```sh
+git submodule update --init
 cargo fmt --all -- --check
 cargo clippy-all
 cargo test-all

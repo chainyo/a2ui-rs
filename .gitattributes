@@ -1,3 +1,1 @@
 * text=auto eol=lf
-fixtures/upstream/** -text linguist-vendored
-fixtures/upstream/manifest.json text eol=lf -linguist-vendored

@@ -11,4 +11,4 @@ A summary or automated check does not establish full conformity.
 - Preserve protocol identifiers, commands, links, and exact quotations.
 - Do not use semicolons or double hyphens as prose punctuation.
 - State implemented behavior separately from planned behavior.
-- Do not change imported upstream files to apply this guide.
+- Do not change upstream submodule files to apply this guide.

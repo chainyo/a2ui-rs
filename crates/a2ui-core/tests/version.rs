@@ -1,6 +1,8 @@
 //! Tests the public version boundary with realistic upstream messages.
 
 use std::error::Error;
+use std::fs;
+use std::path::Path;
 use std::str::FromStr;
 
 use a2ui_core::ProtocolVersion;
@@ -52,13 +54,11 @@ fn serializes_the_canonical_version() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn accepts_versions_in_upstream_contact_and_dashboard_examples() -> Result<(), Box<dyn Error>> {
-    for source in [
-        include_str!("../../../fixtures/upstream/catalogs/basic/v1/examples/contact-card.json"),
-        include_str!(
-            "../../../fixtures/upstream/catalogs/basic/v1/examples/incremental-dashboard.json"
-        ),
-    ] {
-        let example: Value = serde_json::from_str(source)?;
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/upstream/catalogs/basic/v1/examples");
+    for name in ["contact-card.json", "incremental-dashboard.json"] {
+        let source = fs::read_to_string(examples.join(name))?;
+        let example: Value = serde_json::from_str(&source)?;
         let messages = example
             .get("messages")
             .and_then(Value::as_array)

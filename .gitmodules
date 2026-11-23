@@ -1,0 +1,5 @@
+[submodule "a2ui-upstream"]
+	path = fixtures/upstream
+	url = https://github.com/a2ui-project/a2ui.git
+	branch = main
+	shallow = true

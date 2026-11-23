@@ -5,40 +5,48 @@
 **No upstream behavioral conformance case runs against the Core SDK yet.**
 The bootstrap tests only the public protocol version type.
 
-The `upstream` integration test performs two repository checks:
+The `upstream` integration test checks the Git submodule and inventories its Core suites:
 
 ```sh
 cargo test --package a2ui-core --test upstream --locked -- --nocapture
 ```
 
-1. Verify each imported file against its recorded SHA-256 checksum.
-2. List every case in the imported Core YAML suites.
+The test verifies that the checkout matches the recorded Git pin and has no local changes.
+It also checks required reference paths and lists every case in `conformance/core/*.yaml`.
+Cases are pending unless their suite or declared protocol version identifies legacy behavior outside scope.
+The inventory does not establish that the SDK implements those cases.
 
-The test labels cases as pending or outside scope for an explicitly declared legacy protocol.
-Its success means the reference files are intact and readable.
-It does not mean the SDK implements their behavior.
 The audit uses a worker with a 16 MiB stack for deeply nested upstream fixtures.
-This permits the same inventory check on Windows, Linux, and macOS.
+The metadata parser permits nesting up to 256 levels to read legacy rejection fixtures.
+These limits permit the same inventory check on Windows, Linux, and macOS.
 Shared suites can contain legacy steps even when a case has no protocol version.
 A future runner must classify those steps explicitly before executing the case.
 
-## Reference inventory
+## Upstream reference
 
-`fixtures/upstream/manifest.json` pins the upstream Git revision and the exact file inventory.
-Imported files preserve upstream bytes and license notices.
-The reference set contains:
+`fixtures/upstream/` is a Git submodule of [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui).
+The parent repository records its exact commit. There is no separate revision or checksum manifest.
 
-- The Core, Agent, and Framework Adapter blueprints.
-- The v1.0 protocol JSON schemas.
-- The v1 Basic Catalog and two realistic examples.
-- The shared Core YAML suites and the v1.0 processor and validator suites.
-- The upstream conformance guide and manifest schemas.
+Initialize the recorded checkout before running tests:
 
-Dedicated v0.8 and v0.9 processor and validator suites are not imported.
-Legacy content inside shared suites remains unchanged for attribution and review.
-It does not add legacy support to the SDK.
-This is a reference subset. Additional dependencies may be needed before a case can run.
-The manifest does not claim to contain the complete upstream harness.
+```sh
+git submodule update --init
+```
+
+Read the recorded revision with:
+
+```sh
+git ls-tree HEAD fixtures/upstream
+```
+
+The checkout contains the protocol specifications, SDK blueprints, catalogs, examples, and complete upstream conformance suites.
+The tests use v1.0 references and classify dedicated legacy suites outside scope.
+The presence of legacy files does not add legacy support to the SDK.
+Upstream files retain their own license notices. Do not edit them inside this repository.
+
+Git is required for the inventory test. The test reads local Git metadata and does not fetch from the network.
+A missing checkout, mismatched commit, or local modification causes the test to fail.
+Version example tests read the initialized submodule at runtime.
 
 ## Execution contract
 
@@ -60,15 +68,27 @@ Report partial coverage as partial coverage.
 A conformance gate must fail when required v1.0 cases are pending or failed.
 Inventory success must never become that gate.
 
-## Update procedure
+## Updates
 
-1. Select an upstream commit by its full SHA.
-2. Review the specification and blueprint changes.
-3. Retrieve the same reference paths from that commit without modifying their contents.
-4. Add required reference dependencies when the suite introduces new paths.
-5. Update the revision, file inventory, and SHA-256 checksums together.
-6. Review added, removed, renamed, and changed cases.
-7. Run the `upstream` integration test and the implemented behavioral tests.
-8. State the coverage change in the pull request.
+Dependabot checks the submodule weekly and opens a pull request for an updated pin.
+The branch setting in `.gitmodules` selects the upstream branch for update proposals.
+Normal initialization uses the recorded commit rather than the latest branch head.
 
-Do not refresh upstream references as an unrelated dependency update.
+For each update:
+
+1. Review changes to the v1.0 specification, SDK blueprints, and relevant suites.
+2. Initialize the proposed checkout with `git submodule update --init`.
+3. Run the integration tests and implemented behavioral tests.
+4. Review added, removed, renamed, and changed cases.
+5. State any protocol or coverage change in the pull request.
+
+For a manual update, select a full upstream commit SHA and stage the submodule pointer:
+
+```sh
+git -C fixtures/upstream fetch origin UPSTREAM_SHA
+git -C fixtures/upstream checkout --detach UPSTREAM_SHA
+git add fixtures/upstream
+```
+
+The inventory compares the checkout with the staged pin during local validation.
+Keep the pin update separate from unrelated changes.

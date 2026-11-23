@@ -3,7 +3,7 @@
 ## Reference baseline
 
 Use the pinned upstream Core, Agent, and Framework Adapter blueprints in `fixtures/upstream/blueprints/modules/`.
-The [manifest](../fixtures/upstream/manifest.json) records their revision and checksums.
+The Git submodule pointer records their revision. See [conformance](conformance.md) for setup and updates.
 The protocol contract starts at v1.0. Legacy adapters are outside scope.
 
 ## Dependency direction
@@ -43,7 +43,7 @@ GPUI is a possible adapter. It is not a Core SDK dependency.
 Integration tests exercise the public crate.
 Rustdoc checks public documentation. Clippy checks all targets.
 The upstream audit runs as an integration test with dev-dependencies.
-It does not add YAML parsing or hashing to the SDK runtime dependency tree.
+Its YAML parser is a dev-dependency. The SDK runtime does not depend on Git or the upstream checkout.
 
 Hawk assumes that product callers live inside the workspace.
 This workspace contains only a public library, so there is no suitable Hawk target.
