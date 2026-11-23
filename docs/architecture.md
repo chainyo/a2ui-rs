@@ -49,8 +49,21 @@ Use `SurfaceStore::get` to read a surface by ID.
 
 Component definitions stay in order of insertion. A replacement keeps its position and uses all fields from the new definition.
 A duplicate component ID in one message causes an error. The store keeps its previous state.
-Catalog and component tree validation belong to the validation layer.
 After a delete, a create message can use the same surface ID.
+
+## Catalog and topology validation
+
+Load each v1.0 catalog with `Catalog::from_json`. Supply the v1.0 common types schema.
+Register each catalog with `MessageProcessor::add_catalog`.
+Pass decoded messages to `MessageProcessor::apply` to validate them before storage.
+The processor uses the catalog ID on the component or function call.
+If the ID is absent, the processor uses the surface default.
+Schema validation uses only schemas in memory.
+
+The processor checks component relationships on the graph that would result from the message.
+The checks include parent and child rules, missing references, cycles, depth, and reachability from `root`.
+An error leaves the surface unchanged.
+Use `ValidationConfig` to permit incomplete graphs during streaming.
 
 ## Data model
 

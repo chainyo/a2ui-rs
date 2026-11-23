@@ -11,6 +11,8 @@ repository = "https://github.com/chainyo/a2ui-rs"
 
 [workspace.dependencies]
 a2ui-rs = { path = "crates/a2ui-rs" }
+boon = { version = "0.6.1", default-features = false }
+percent-encoding = "2.3.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 unicode-ident = "1.0.27"
