@@ -3,7 +3,8 @@
 ## Test procedure
 
 Initialize the upstream submodule before you run the tests.
-The Core harness uses the public Rust types for supported upstream cases.
+The Core harness uses the public Rust APIs for supported upstream cases.
+The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.
 
