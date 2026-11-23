@@ -1,8 +1,0 @@
-{
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":pinAllExceptPeerDependencies"],
-  "rangeStrategy": "bump",
-  "packageRules": [
-    {"matchManagers": ["cargo"], "rangeStrategy": "bump"}
-  ]
-}
