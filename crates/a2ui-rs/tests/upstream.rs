@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
-use a2ui_rs::protocol::{Extensions, FunctionResponse};
+use a2ui_rs::data_model::DataModel;
+use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage, Extensions, FunctionResponse};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,6 +23,8 @@ struct Case {
     #[serde(default)]
     action: String,
     definition: Option<String>,
+    catalog: Option<Value>,
+    expect: Option<Value>,
     #[serde(default)]
     steps: Vec<Value>,
 }
@@ -64,7 +67,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
             .to_string_lossy()
             .replace('\\', "/");
         let source = fs::read_to_string(suite)?;
-        let cases = if suite_name == "core/common_types.yaml" {
+        let cases = if suite_name == "core/common_types.yaml" || is_data_model_suite(&suite_name) {
             parse_cases_with_policy(&source, serde_saphyr::NonFiniteFloatPolicy::Reject)?
         } else {
             parse_cases(&source)?
@@ -87,15 +90,12 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 ) {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
-            } else if case.protocol_version.as_deref() == Some("1.0")
-                && suite_name == "core/common_types.yaml"
-                && case.action == "validate_common_type"
-                && matches!(
-                    case.definition.as_deref(),
-                    Some("FunctionResponse" | "Extensions")
-                )
-            {
-                match execute_case(&case) {
+            } else if supports_case(&suite_name, &case) {
+                match if is_data_model_suite(&suite_name) {
+                    execute_data_model_case(&case)
+                } else {
+                    execute_case(&case)
+                } {
                     Ok(()) => {
                         passed += 1;
                         ("passed", None)
@@ -174,6 +174,100 @@ fn core_suites(upstream: &Path) -> Result<Vec<PathBuf>, TestError> {
     });
     suites.sort();
     Ok(suites)
+}
+
+fn is_data_model_suite(suite: &str) -> bool {
+    matches!(
+        suite,
+        "core/data_model_pointers.yaml" | "core/data_deletion.yaml"
+    )
+}
+
+fn supports_case(suite: &str, case: &Case) -> bool {
+    if is_data_model_suite(suite) {
+        return case.action == "validate"
+            && case
+                .catalog
+                .as_ref()
+                .and_then(|catalog| catalog["protocolVersion"].as_str())
+                == Some("1.0");
+    }
+    suite == "core/common_types.yaml"
+        && case.protocol_version.as_deref() == Some("1.0")
+        && case.action == "validate_common_type"
+        && matches!(
+            case.definition.as_deref(),
+            Some("FunctionResponse" | "Extensions")
+        )
+}
+
+fn execute_data_model_case(case: &Case) -> Result<(), TestError> {
+    let mut surface = None;
+    for step in &case.steps {
+        let messages = step
+            .get("payload")
+            .and_then(Value::as_array)
+            .ok_or("missing payload")?;
+        if messages.is_empty() {
+            return Err("empty data model payload".into());
+        }
+        let mut rejected = false;
+        for (index, message) in messages.iter().enumerate() {
+            let AgentToRendererMessage::V1(operation) = serde_json::from_value(message.clone())?;
+            match operation {
+                AgentToRenderer::CreateSurface(create)
+                    if surface.is_none() && create.components.is_none() =>
+                {
+                    surface = Some((
+                        create.surface_id,
+                        DataModel::new(create.data_model.unwrap_or_default()),
+                    ));
+                }
+                AgentToRenderer::UpdateDataModel(update) => {
+                    let (surface_id, model) = surface.as_mut().ok_or("update before create")?;
+                    if *surface_id != update.surface_id {
+                        return Err("unexpected surface ID".into());
+                    }
+                    let before = model.clone();
+                    let result = model.set(update.path.as_deref().unwrap_or("/"), update.value);
+                    if let Err(error) = result {
+                        let Some(expected) = step.get("expectError") else {
+                            return Err(error.into());
+                        };
+                        let expected_message = expected["message"]
+                            .as_str()
+                            .ok_or("missing error message")?;
+                        if index + 1 != messages.len()
+                            || expected["category"] != "DataError"
+                            || !error.to_string().contains(expected_message)
+                            || *model != before
+                        {
+                            return Err(format!("unexpected data model failure: {error}").into());
+                        }
+                        rejected = true;
+                        break;
+                    }
+                }
+                _ => return Err("unsupported data model fixture operation".into()),
+            }
+        }
+        if step.get("expectError").is_some() && !rejected {
+            return Err("expected a data model update to fail".into());
+        }
+    }
+    let (surface_id, model) = surface.ok_or("missing surface setup")?;
+    if let Some(expect) = &case.expect {
+        if expect["surfaces"][&surface_id]["dataModel"] != *model.root() {
+            return Err(format!("unexpected data model: {}", model.root()).into());
+        }
+    } else if !case
+        .steps
+        .iter()
+        .any(|step| step.get("expectError").is_some())
+    {
+        return Err("missing data model expectation".into());
+    }
+    Ok(())
 }
 
 fn execute_case(case: &Case) -> Result<(), TestError> {

@@ -37,6 +37,23 @@ Agent helpers are responsible for capability negotiation, prompts, and inference
 They use the core to validate outgoing messages.
 Framework adapters map resolved state to native widgets. They also route user events.
 
+## Data model
+
+Create one `DataModel` per surface. Use the initial object from `createSurface`.
+Select the destination surface before you apply an `updateDataModel` message.
+Pass its path and value to `DataModel::set`. Use `/` when the message omits the path.
+
+Use `DataModel::get` to read values at absolute A2UI JSON Pointers.
+The data model accepts the `~0` and `~1` escapes from [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901.html).
+An empty path or a path with only slashes selects the root.
+The data model ignores empty path segments.
+
+A write creates missing objects and arrays. Missing array positions hold JSON null.
+The maximum array index for a write is 10,000.
+A null write removes an object field or sets an array position to null.
+A null write to the root replaces the data with an empty object.
+A null write to a missing path leaves the data unchanged.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.
