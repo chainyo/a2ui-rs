@@ -2,8 +2,9 @@
 
 A framework-independent Rust SDK for [A2UI](https://a2ui.org/), starting with protocol v1.0.
 
-Our goal is a complete, conformant Rust implementation that can earn upstream adoption.
-This is a community project. Google and the A2UI project do not endorse or maintain this repository.
+> [!NOTE]
+> Our goal is a complete, conformant Rust implementation that can earn upstream adoption.
+> This is a community project. Google and the A2UI project do not endorse or maintain this repository.
 
 ## Status
 
