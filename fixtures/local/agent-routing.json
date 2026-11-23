@@ -1,0 +1,17 @@
+{
+  "create": {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "shipment",
+      "catalogId": "example:shipping",
+      "dataModel": {"sku": "SKU-12"}
+    }
+  },
+  "binding": {
+    "@call": "quoteShipment",
+    "args": {
+      "address": {"@call": "fetchAddress", "args": {}},
+      "stock": {"@call": "fetchStock", "args": {"sku": {"@path": "/sku"}}}
+    }
+  }
+}

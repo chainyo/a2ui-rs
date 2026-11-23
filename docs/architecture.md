@@ -123,6 +123,26 @@ The handler checks catalog permissions before it calls a renderer function.
 An agent cannot invoke a function that requires user activation.
 Use `CallOptions` to mark a renderer-initiated call that comes from an active user gesture.
 
+## Agent routing
+
+Use `RoutingSession` to evaluate bindings, checks, and actions that can call the agent.
+Mount a component property with `mount_property`.
+Use `mount_binding` for a standalone expression. Use `mount_check` for a check condition.
+Use `run_action` for a function action. Use `dispatch_event` for an event with ordered context entries.
+Use `unmount` when the renderer discards a binding, check, or completed action.
+
+Pass inbound messages to `receive`. Call `advance` after a message, data change, or deadline.
+Supply the outbound transport callback to `advance`.
+Use its result to update the changed evaluations and send renderer errors.
+The evaluation status contains the result, including a returned validation result object.
+A pending check passes until the call completes. An agent error makes the check fail.
+
+The session uses the local implementation when the catalog has one.
+If no local implementation exists, the session sends the validated call to the agent.
+Bindings and checks share identical requests on the same surface and can use cached answers.
+An action sends a new request for each invocation.
+Event context entries resolve in order. An error stops the event before dispatch.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.

@@ -18,6 +18,8 @@ use serde_json::Value;
 
 #[path = "upstream/resolution.rs"]
 mod resolution;
+#[path = "upstream/routing.rs"]
+mod routing;
 #[path = "upstream/rpc.rs"]
 mod rpc;
 #[path = "upstream/validation.rs"]
@@ -52,6 +54,9 @@ struct Case {
     args: Option<Value>,
     function: Option<String>,
     surface: Option<Value>,
+    catalogs: Option<Value>,
+    #[serde(rename = "dataModel")]
+    data_model: Option<Value>,
     #[serde(rename = "expect_error")]
     parse_error: Option<Value>,
     #[serde(default)]
@@ -217,6 +222,7 @@ fn supports_case(suite: &str, case: &Case) -> bool {
     if validation::supports(suite, case)
         || resolution::supports(suite, case)
         || rpc::supports(suite, case)
+        || routing::supports(suite, case)
     {
         return true;
     }
@@ -266,6 +272,8 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
         resolution::execute(upstream, case)
     } else if rpc::supports(suite, case) {
         rpc::execute(upstream, case)
+    } else if routing::supports(suite, case) {
+        routing::execute(upstream, case)
     } else if is_data_model_suite(suite) {
         execute_data_model_case(case)
     } else if suite == SURFACE_SUITE {

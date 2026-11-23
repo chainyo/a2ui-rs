@@ -116,6 +116,11 @@ pub struct LocalFunctions<'a> {
 }
 
 impl<'a> LocalFunctions<'a> {
+    pub(crate) fn contains(&self, catalog: &str, name: &str) -> bool {
+        self.handlers
+            .get(catalog)
+            .is_some_and(|functions| functions.contains_key(name))
+    }
     /// Registers a handler. A later registration replaces the handler for the same function.
     pub fn insert(
         &mut self,
@@ -299,12 +304,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
             )),
             value => Ok(value.clone()),
         }?;
-        Ok(match kind {
-            Some(PropertyKind::String) => Value::String(to_text(&resolved)),
-            Some(PropertyKind::Boolean) => Value::Bool(to_boolean(&resolved)),
-            Some(PropertyKind::Number) => to_number(resolved),
-            _ => resolved,
-        })
+        Ok(coerce(resolved, kind.copied()))
     }
 
     fn object(
@@ -369,7 +369,44 @@ impl<'a, 'f> Resolver<'a, 'f> {
         }
         catalog.validate_function(&call)?;
         let args = self.catalog_arguments(scope, &call, catalog, template_catalog, nested)?;
-        if call.name == "formatString" {
+        self.invoke_local(scope, catalog.id(), &call.name, &args, nested)
+    }
+
+    pub(crate) fn invoke_resolved(
+        &self,
+        scope: &DataScope,
+        catalog_id: &str,
+        name: &str,
+        args: &JsonObject,
+    ) -> Result<Value, ResolveError> {
+        self.invoke_local(scope, catalog_id, name, args, Nesting::default().call()?)
+    }
+
+    pub(crate) fn template_part(
+        &self,
+        scope: &DataScope,
+        catalog: &str,
+        part: Expression,
+    ) -> Result<String, ResolveError> {
+        let value = match part {
+            Expression::Literal(value) => value,
+            Expression::Binding(path) => self.binding(scope, &path)?,
+            Expression::Call(call) => {
+                self.call(scope, call, Some(catalog), Nesting::default().call()?)?
+            }
+        };
+        Ok(to_text(&value))
+    }
+
+    fn invoke_local(
+        &self,
+        scope: &DataScope,
+        catalog_id: &str,
+        name: &str,
+        args: &JsonObject,
+        nested: Nesting,
+    ) -> Result<Value, ResolveError> {
+        if name == "formatString" {
             let template = args
                 .get("value")
                 .and_then(Value::as_str)
@@ -379,13 +416,13 @@ impl<'a, 'f> Resolver<'a, 'f> {
                 let result = match part {
                     Expression::Literal(value) => value,
                     Expression::Binding(path) => self.binding(scope, &path)?,
-                    Expression::Call(call) => self.call(scope, call, Some(catalog.id()), nested)?,
+                    Expression::Call(call) => self.call(scope, call, Some(catalog_id), nested)?,
                 };
                 output.push_str(&to_text(&result));
             }
             Ok(Value::String(output))
         } else {
-            self.functions.invoke(catalog.id(), &call.name, &args)
+            self.functions.invoke(catalog_id, name, args)
         }
     }
 
@@ -460,7 +497,7 @@ pub(crate) fn validate_call_shape(call: &FunctionCall) -> Result<(), ResolveErro
     Ok(())
 }
 
-fn index_with_offset(index: usize, args: &JsonObject) -> Result<Value, ResolveError> {
+pub(crate) fn index_with_offset(index: usize, args: &JsonObject) -> Result<Value, ResolveError> {
     let Some(offset) = args.get("offset") else {
         return Ok(Value::from(index));
     };
@@ -497,13 +534,22 @@ fn to_text(value: &Value) -> String {
     }
 }
 
-fn to_boolean(value: &Value) -> bool {
+pub(crate) fn to_boolean(value: &Value) -> bool {
     match value {
         Value::Bool(value) => *value,
         Value::String(value) => value.eq_ignore_ascii_case("true"),
         Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
         Value::Object(value) => value.get("valid").and_then(Value::as_bool).unwrap_or(false),
         _ => false,
+    }
+}
+
+pub(crate) fn coerce(value: Value, kind: Option<PropertyKind>) -> Value {
+    match kind {
+        Some(PropertyKind::String) => Value::String(to_text(&value)),
+        Some(PropertyKind::Boolean) => Value::Bool(to_boolean(&value)),
+        Some(PropertyKind::Number) => to_number(value),
+        _ => value,
     }
 }
 
