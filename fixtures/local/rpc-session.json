@@ -1,0 +1,50 @@
+{
+  "catalog": {
+    "protocolVersion": "1.0",
+    "catalogId": "example:warehouse",
+    "functions": {
+      "queryStock": {
+        "returnType": "object",
+        "properties": {
+          "args": {
+            "type": "object",
+            "properties": {
+              "sku": {"$ref": "common_types.json#/$defs/DynamicString"},
+              "options": {
+                "type": "object",
+                "default": {},
+                "properties": {"limit": {"type": "integer", "default": 3}},
+                "required": ["limit"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["sku", "options"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["args"]
+      },
+      "confirmRestock": {"requiresUserActivation": true, "returnType": "void"}
+    }
+  },
+  "surfaces": [
+    {"version": "1.0", "createSurface": {
+      "surfaceId": "warehouse-north", "catalogId": "example:warehouse", "dataModel": {"sku": "ITEM-19"}
+    }},
+    {"version": "1.0", "createSurface": {
+      "surfaceId": "warehouse-south", "catalogId": "example:warehouse", "dataModel": {"sku": "ITEM-47"}
+    }}
+  ],
+  "request": {
+    "surfaceId": "warehouse-north",
+    "functionCallId": "north-stock-1",
+    "callFunction": {"@call": "queryStock", "args": {"sku": {"@path": "/sku"}}}
+  },
+  "remoteConfirmation": {
+    "version": "1.0",
+    "callRendererFunction": {
+      "surfaceId": "warehouse-north", "functionCallId": "confirm-1",
+      "callFunction": {"@call": "confirmRestock", "catalogId": "example:warehouse"}
+    }
+  }
+}

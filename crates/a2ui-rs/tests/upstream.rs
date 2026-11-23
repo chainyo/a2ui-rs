@@ -18,6 +18,8 @@ use serde_json::Value;
 
 #[path = "upstream/resolution.rs"]
 mod resolution;
+#[path = "upstream/rpc.rs"]
+mod rpc;
 #[path = "upstream/validation.rs"]
 mod validation;
 
@@ -212,7 +214,10 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn supports_case(suite: &str, case: &Case) -> bool {
-    if validation::supports(suite, case) || resolution::supports(suite, case) {
+    if validation::supports(suite, case)
+        || resolution::supports(suite, case)
+        || rpc::supports(suite, case)
+    {
         return true;
     }
     if suite == SURFACE_SUITE {
@@ -259,6 +264,8 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
         validation::execute(upstream, case)
     } else if resolution::supports(suite, case) {
         resolution::execute(upstream, case)
+    } else if rpc::supports(suite, case) {
+        rpc::execute(upstream, case)
     } else if is_data_model_suite(suite) {
         execute_data_model_case(case)
     } else if suite == SURFACE_SUITE {

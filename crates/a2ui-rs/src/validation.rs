@@ -51,7 +51,7 @@ impl ValidationConfig {
 #[derive(Default)]
 pub struct MessageProcessor {
     store: SurfaceStore,
-    catalogs: BTreeMap<String, Catalog>,
+    pub(crate) catalogs: BTreeMap<String, Catalog>,
     config: ValidationConfig,
 }
 

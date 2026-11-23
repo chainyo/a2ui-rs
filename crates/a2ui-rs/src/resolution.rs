@@ -129,7 +129,7 @@ impl<'a> LocalFunctions<'a> {
             .insert(name.into(), Box::new(handler));
     }
 
-    fn invoke(
+    pub(crate) fn invoke(
         &self,
         catalog_id: &str,
         name: &str,
@@ -176,9 +176,23 @@ impl<'a, 'f> Resolver<'a, 'f> {
         catalogs: &'a BTreeMap<String, Catalog>,
         functions: &'a LocalFunctions<'f>,
     ) -> Self {
+        Self::with_context(
+            surface.data_model(),
+            surface.catalog_id(),
+            catalogs,
+            functions,
+        )
+    }
+
+    pub(crate) fn with_context(
+        data: &'a DataModel,
+        default_catalog: Option<&'a str>,
+        catalogs: &'a BTreeMap<String, Catalog>,
+        functions: &'a LocalFunctions<'f>,
+    ) -> Self {
         Self {
-            data: surface.data_model(),
-            default_catalog: surface.catalog_id(),
+            data,
+            default_catalog,
             catalogs,
             functions,
             properties: None,
@@ -354,16 +368,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
             return Err(ResolveError::UserActivation(call.name));
         }
         catalog.validate_function(&call)?;
-        let payload = serde_json::to_value(&call)?;
-        let shape = catalog.inspect_payload(catalog.function_schema(&call.name), &payload);
-        let resolver = Resolver {
-            properties: Some(&shape.properties),
-            ..*self
-        };
-        let args = payload.get("args").and_then(Value::as_object).map_or_else(
-            || Ok(JsonObject::new()),
-            |args| resolver.object(scope, args, template_catalog, nested),
-        )?;
+        let args = self.catalog_arguments(scope, &call, catalog, template_catalog, nested)?;
         if call.name == "formatString" {
             let template = args
                 .get("value")
@@ -382,6 +387,40 @@ impl<'a, 'f> Resolver<'a, 'f> {
         } else {
             self.functions.invoke(catalog.id(), &call.name, &args)
         }
+    }
+
+    pub(crate) fn rpc_arguments(
+        &self,
+        call: &FunctionCall,
+        catalog: &Catalog,
+    ) -> Result<JsonObject, ResolveError> {
+        self.catalog_arguments(
+            &DataScope::default(),
+            call,
+            catalog,
+            None,
+            Nesting::default(),
+        )
+    }
+
+    fn catalog_arguments(
+        &self,
+        scope: &DataScope,
+        call: &FunctionCall,
+        catalog: &Catalog,
+        template_catalog: Option<&str>,
+        depth: Nesting,
+    ) -> Result<JsonObject, ResolveError> {
+        let payload = serde_json::to_value(call)?;
+        let shape = catalog.inspect_payload(catalog.function_schema(&call.name), &payload);
+        let resolver = Resolver {
+            properties: Some(&shape.properties),
+            ..*self
+        };
+        payload.get("args").and_then(Value::as_object).map_or_else(
+            || Ok(JsonObject::new()),
+            |args| resolver.object(scope, args, template_catalog, depth),
+        )
     }
 
     fn arguments(

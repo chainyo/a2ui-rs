@@ -182,6 +182,68 @@ impl Catalog {
         &self.document["functions"][name]
     }
 
+    pub(crate) fn apply_function_defaults(&self, call: &mut FunctionCall) {
+        let schema = self.function_schema(&call.name);
+        let mut payload = serde_json::json!({});
+        if let Some(args) = call.args.take() {
+            payload["args"] = Value::Object(args);
+        }
+        self.apply_defaults(schema, &mut payload, false, 0, &mut BTreeSet::new());
+        if let Some(args) = payload["args"].as_object_mut() {
+            call.args = Some(std::mem::take(args));
+        }
+    }
+
+    fn apply_defaults(
+        &self,
+        schema: &Value,
+        value: &mut Value,
+        common: bool,
+        depth: usize,
+        active: &mut BTreeSet<*const Value>,
+    ) {
+        let address = std::ptr::from_ref(schema);
+        if depth >= 50 || !active.insert(address) {
+            return;
+        }
+        if let Some(reference) = schema["$ref"].as_str() {
+            let (pointer, common) =
+                common_ref(reference).map_or((reference, common), |pointer| (pointer, true));
+            if let Some(target) = self.schema_target(pointer, common) {
+                self.apply_defaults(target, value, common, depth + 1, active);
+            }
+        }
+        if let Some(schemas) = schema["allOf"].as_array() {
+            for schema in schemas {
+                self.apply_defaults(schema, value, common, depth + 1, active);
+            }
+        }
+        if let (Some(properties), Some(object)) =
+            (schema["properties"].as_object(), value.as_object_mut())
+        {
+            for (key, schema) in properties {
+                if !object.contains_key(key)
+                    && let Some(default) = schema.get("default")
+                {
+                    object.insert(key.clone(), default.clone());
+                }
+                if let Some(value) = object.get_mut(key) {
+                    self.apply_defaults(schema, value, common, depth + 1, &mut BTreeSet::new());
+                }
+            }
+        }
+        if let Some(array) = value.as_array_mut() {
+            let prefix = schema["prefixItems"]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice);
+            for (index, value) in array.iter_mut().enumerate() {
+                let schema = prefix.get(index).unwrap_or(&schema["items"]);
+                self.apply_defaults(schema, value, common, depth + 1, &mut BTreeSet::new());
+            }
+        }
+        active.remove(&address);
+    }
+
     pub(crate) fn is_agent_only(&self, name: &str) -> bool {
         self.document["functions"][name]["allowedCallers"] == "agentOnly"
     }
