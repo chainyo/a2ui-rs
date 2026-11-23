@@ -193,6 +193,10 @@ impl Components {
     pub fn as_slice(&self) -> &[Component] {
         &self.0
     }
+
+    pub(crate) fn into_vec(self) -> Vec<Component> {
+        self.0
+    }
 }
 
 impl TryFrom<Vec<Component>> for Components {

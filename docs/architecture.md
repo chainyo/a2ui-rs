@@ -43,10 +43,12 @@ Create a `SurfaceStore` for each renderer. Pass decoded messages to `SurfaceStor
 Use `SurfaceStore::get` to read a surface by ID.
 
 - `createSurface` stores the configuration and initial data. An active ID causes a duplicate surface error.
+- `updateComponents` adds or replaces component definitions by ID. An absent surface ID causes an unknown surface error.
 - `updateDataModel` changes the data of the destination surface. An absent ID causes an unknown surface error.
 - `deleteSurface` removes the surface. A delete for an absent ID leaves the store unchanged.
 
-Component definitions from `createSurface` stay in the order in the message.
+Component definitions stay in order of insertion. A replacement keeps its position and uses all fields from the new definition.
+A duplicate component ID in one message causes an error. The store keeps its previous state.
 Catalog and component tree validation belong to the validation layer.
 After a delete, a create message can use the same surface ID.
 

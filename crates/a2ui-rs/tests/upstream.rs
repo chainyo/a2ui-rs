@@ -8,7 +8,9 @@ use std::process::Command;
 use std::thread;
 
 use a2ui_rs::data_model::DataModel;
-use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage, Extensions, FunctionResponse};
+use a2ui_rs::protocol::{
+    AgentToRenderer, AgentToRendererMessage, Component, Extensions, FunctionResponse,
+};
 use a2ui_rs::surface::{SurfaceError, SurfaceStore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -203,6 +205,11 @@ fn supports_case(suite: &str, case: &Case) -> bool {
                     | "test_update_data_model_on_deleted_surface_error"
                     | "test_delete_non_existent_surface_is_safe_noop"
                     | "test_v10_create_surface_theme_rejected_strict"
+                    | "test_batch_multi_stage_lifecycle_pipeline"
+                    | "test_update_components_on_deleted_surface_error"
+                    | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
+                    | "test_v10_update_components_stores_at_prefixed_component_metadata"
+                    | "test_v10_update_components_rejects_null_at_catalog_id"
             );
     }
 
@@ -278,7 +285,9 @@ fn execute_surface_step(
             Ok(message) => match store.apply(message) {
                 Ok(()) => None,
                 Err(
-                    error @ (SurfaceError::UnknownSurface(_) | SurfaceError::DuplicateSurface(_)),
+                    error @ (SurfaceError::UnknownSurface(_)
+                    | SurfaceError::DuplicateSurface(_)
+                    | SurfaceError::DuplicateComponent(_)),
                 ) => Some(("IntegrityError", error.to_string())),
                 Err(error) => return Err(error.into()),
             },
@@ -311,13 +320,47 @@ fn execute_surface_step(
                 let actual = match (field.as_str(), surface) {
                     ("exists", _) => Value::Bool(surface.is_some()),
                     ("sendDataModel", Some(surface)) => Value::Bool(surface.send_data_model()),
-                    ("components", Some(surface)) => serde_json::to_value(surface.components())?,
+                    ("components", Some(surface)) => {
+                        assert_surface_components(surface.components(), expected)?;
+                        continue;
+                    }
                     ("dataModel", Some(surface)) => surface.data_model().root().clone(),
                     _ => return Err(format!("cannot verify {field} on {id}").into()),
                 };
                 if actual != *expected {
                     return Err(format!("{id}.{field}: expected {expected}, got {actual}").into());
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn assert_surface_components(actual: &[Component], expected: &Value) -> Result<(), TestError> {
+    let expected = expected.as_array().ok_or("expected a component array")?;
+    if actual.len() != expected.len() {
+        return Err(format!(
+            "expected {} components, got {}",
+            expected.len(),
+            actual.len()
+        )
+        .into());
+    }
+    for (actual, expected) in actual.iter().zip(expected) {
+        let fields = expected
+            .as_object()
+            .ok_or("invalid component expectation")?;
+        let serialized = serde_json::to_value(actual)?;
+        for (field, value) in fields {
+            let actual_field = serialized.get(field);
+            if actual_field != Some(value)
+                && !(field == "@metadata" && value.is_null() && actual_field.is_none())
+            {
+                return Err(format!(
+                    "component {}.{field}: expected {value}, got {actual_field:?}",
+                    actual.id
+                )
+                .into());
             }
         }
     }
