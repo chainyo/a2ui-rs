@@ -48,6 +48,9 @@ pub struct RpcHandler {
 }
 
 impl RpcHandler {
+    pub(crate) fn used_call_id(&self, id: &str) -> bool {
+        self.used_ids.contains(id)
+    }
     /// Moves a renderer's message processor into a new RPC session.
     #[must_use]
     pub fn new(processor: MessageProcessor) -> Self {
@@ -232,6 +235,37 @@ impl RpcHandler {
             call.args = Some(args);
         }
 
+        self.enqueue(request, deadline, outbound)
+    }
+
+    pub(crate) fn send_resolved(
+        &mut self,
+        request: CallAgentFunction,
+        timeout: Option<Duration>,
+        now: Instant,
+        outbound: &mut Outbound<'_>,
+    ) -> Result<PendingCall, RpcError> {
+        if self.disposed {
+            return Err(RpcError::Disposed);
+        }
+        if self.used_ids.contains(&request.function_call_id) {
+            return Err(RpcError::Duplicate(request.function_call_id));
+        }
+        let deadline = now
+            .checked_add(timeout.unwrap_or(DEFAULT_TIMEOUT))
+            .ok_or_else(|| invalid("Timeout is out of range"))?;
+        if deadline <= now {
+            return Err(RpcError::Timeout);
+        }
+        self.enqueue(request, deadline, outbound)
+    }
+
+    fn enqueue(
+        &mut self,
+        request: CallAgentFunction,
+        deadline: Instant,
+        outbound: &mut Outbound<'_>,
+    ) -> Result<PendingCall, RpcError> {
         let id = request.function_call_id.clone();
         let state = Arc::new(Mutex::new(Completion::default()));
         self.used_ids.insert(id.clone());
