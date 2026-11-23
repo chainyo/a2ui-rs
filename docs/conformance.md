@@ -4,6 +4,7 @@
 
 Initialize the upstream submodule before you run the tests.
 The Core harness uses the public Rust APIs for supported upstream cases.
+The lifecycle cases send decoded messages to `SurfaceStore::apply`.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.

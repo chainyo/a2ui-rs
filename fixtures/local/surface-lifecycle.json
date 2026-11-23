@@ -1,0 +1,10 @@
+[
+  {"version":"1.0","createSurface":{"surfaceId":"contact","catalogId":"example:contacts","sendDataModel":true,"metadata":{"extensions":{"mode":"edit"}},"components":[{"id":"root","component":"Text","text":{"@path":"/person/name"}}],"dataModel":{"person":{"name":"Ada","draft":true}}}},
+  {"version":"1.0","createSurface":{"surfaceId":"sidebar","dataModel":{"count":1}}},
+  {"version":"1.0","updateDataModel":{"surfaceId":"contact","path":"/person/name","value":"Grace"}},
+  {"version":"1.0","updateDataModel":{"surfaceId":"contact","path":"/person/draft","value":null}},
+  {"version":"1.0","updateDataModel":{"surfaceId":"contact","value":{"ready":true}}},
+  {"version":"1.0","deleteSurface":{"surfaceId":"contact"}},
+  {"version":"1.0","updateDataModel":{"surfaceId":"contact","path":"/person/name","value":"Ada"}},
+  {"version":"1.0","createSurface":{"surfaceId":"contact"}}
+]

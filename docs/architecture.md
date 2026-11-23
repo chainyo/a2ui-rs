@@ -37,11 +37,23 @@ Agent helpers are responsible for capability negotiation, prompts, and inference
 They use the core to validate outgoing messages.
 Framework adapters map resolved state to native widgets. They also route user events.
 
+## Surface lifecycle
+
+Create a `SurfaceStore` for each renderer. Pass decoded messages to `SurfaceStore::apply`.
+Use `SurfaceStore::get` to read a surface by ID.
+
+- `createSurface` stores the configuration and initial data. An active ID causes a duplicate surface error.
+- `updateDataModel` changes the data of the destination surface. An absent ID causes an unknown surface error.
+- `deleteSurface` removes the surface. A delete for an absent ID leaves the store unchanged.
+
+Component definitions from `createSurface` stay in the order in the message.
+Catalog and component tree validation belong to the validation layer.
+After a delete, a create message can use the same surface ID.
+
 ## Data model
 
-Create one `DataModel` per surface. Use the initial object from `createSurface`.
-Select the destination surface before you apply an `updateDataModel` message.
-Pass its path and value to `DataModel::set`. Use `/` when the message omits the path.
+Each surface has one `DataModel`. The store uses the object from `createSurface` as its initial data.
+If an update omits the path, the store passes `/` to `DataModel::set`.
 
 Use `DataModel::get` to read values at absolute A2UI JSON Pointers.
 The data model accepts the `~0` and `~1` escapes from [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901.html).

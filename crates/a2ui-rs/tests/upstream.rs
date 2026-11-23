@@ -9,6 +9,7 @@ use std::thread;
 
 use a2ui_rs::data_model::DataModel;
 use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage, Extensions, FunctionResponse};
+use a2ui_rs::surface::{SurfaceError, SurfaceStore};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +26,9 @@ struct Case {
     definition: Option<String>,
     catalog: Option<Value>,
     expect: Option<Value>,
+    messages: Option<Value>,
+    #[serde(rename = "expectError")]
+    expect_error: Option<Value>,
     #[serde(default)]
     steps: Vec<Value>,
 }
@@ -67,7 +71,10 @@ fn audit(root: &Path) -> Result<(), TestError> {
             .to_string_lossy()
             .replace('\\', "/");
         let source = fs::read_to_string(suite)?;
-        let cases = if suite_name == "core/common_types.yaml" || is_data_model_suite(&suite_name) {
+        let cases = if suite_name == "core/common_types.yaml"
+            || is_data_model_suite(&suite_name)
+            || suite_name == SURFACE_SUITE
+        {
             parse_cases_with_policy(&source, serde_saphyr::NonFiniteFloatPolicy::Reject)?
         } else {
             parse_cases(&source)?
@@ -91,11 +98,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
-                match if is_data_model_suite(&suite_name) {
-                    execute_data_model_case(&case)
-                } else {
-                    execute_case(&case)
-                } {
+                match execute_supported_case(&suite_name, &case) {
                     Ok(()) => {
                         passed += 1;
                         ("passed", None)
@@ -183,7 +186,26 @@ fn is_data_model_suite(suite: &str) -> bool {
     )
 }
 
+const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
+
 fn supports_case(suite: &str, case: &Case) -> bool {
+    if suite == SURFACE_SUITE {
+        return case.action == "process_messages"
+            && case.protocol_version.as_deref() == Some("1.0")
+            && matches!(
+                case.name.as_str(),
+                "test_v10_create_surface_inline_initialization"
+                    | "test_v10_create_surface_optional_catalog_id"
+                    | "test_v10_create_surface_with_metadata_extensions"
+                    | "test_v10_create_surface_metadata_extension_key_must_be_identifier"
+                    | "test_v10_create_surface_metadata_only_holds_extensions"
+                    | "test_v10_update_data_model_deletion"
+                    | "test_update_data_model_on_deleted_surface_error"
+                    | "test_delete_non_existent_surface_is_safe_noop"
+                    | "test_v10_create_surface_theme_rejected_strict"
+            );
+    }
+
     if is_data_model_suite(suite) {
         return case.action == "validate"
             && case
@@ -199,6 +221,107 @@ fn supports_case(suite: &str, case: &Case) -> bool {
             case.definition.as_deref(),
             Some("FunctionResponse" | "Extensions")
         )
+}
+
+fn execute_supported_case(suite: &str, case: &Case) -> Result<(), TestError> {
+    if is_data_model_suite(suite) {
+        execute_data_model_case(case)
+    } else if suite == SURFACE_SUITE {
+        execute_surface_case(case)
+    } else {
+        execute_case(case)
+    }
+}
+
+fn execute_surface_case(case: &Case) -> Result<(), TestError> {
+    let mut store = SurfaceStore::default();
+    if let Some(messages) = &case.messages {
+        if !case.steps.is_empty() {
+            return Err("fixture has both messages and steps".into());
+        }
+        return execute_surface_step(
+            &mut store,
+            messages,
+            case.expect.as_ref(),
+            case.expect_error.as_ref(),
+        );
+    }
+    if case.steps.is_empty() {
+        return Err("fixture has no surface messages".into());
+    }
+    for step in &case.steps {
+        execute_surface_step(
+            &mut store,
+            step.get("messages").ok_or("missing surface messages")?,
+            step.get("expect"),
+            step.get("expectError"),
+        )?;
+    }
+    Ok(())
+}
+
+fn execute_surface_step(
+    store: &mut SurfaceStore,
+    messages: &Value,
+    expect: Option<&Value>,
+    expect_error: Option<&Value>,
+) -> Result<(), TestError> {
+    let messages = messages.as_array().ok_or("expected a message array")?;
+    if messages.is_empty() || (expect.is_none() && expect_error.is_none()) {
+        return Err("missing messages or expectations".into());
+    }
+    let mut rejected = false;
+    for (index, value) in messages.iter().enumerate() {
+        let before = store.clone();
+        let failure = match serde_json::from_value(value.clone()) {
+            Err(error) => Some(("ValidationError", error.to_string())),
+            Ok(message) => match store.apply(message) {
+                Ok(()) => None,
+                Err(
+                    error @ (SurfaceError::UnknownSurface(_) | SurfaceError::DuplicateSurface(_)),
+                ) => Some(("IntegrityError", error.to_string())),
+                Err(error) => return Err(error.into()),
+            },
+        };
+        if let Some((category, message)) = failure {
+            let expected = expect_error.ok_or_else(|| message.clone())?;
+            if expected.as_object().is_none_or(|fields| fields.len() != 1)
+                || expected["category"] != category
+                || index + 1 != messages.len()
+                || *store != before
+            {
+                return Err(format!("unexpected surface failure: {category}: {message}").into());
+            }
+            rejected = true;
+        }
+    }
+    if expect_error.is_some() && !rejected {
+        return Err("expected a surface message to fail".into());
+    }
+    if let Some(expect) = expect {
+        let surfaces = expect["surfaces"]
+            .as_object()
+            .ok_or("missing surface expectations")?;
+        if expect.as_object().is_none_or(|fields| fields.len() != 1) || surfaces.is_empty() {
+            return Err("unsupported surface expectation".into());
+        }
+        for (id, fields) in surfaces {
+            for (field, expected) in fields.as_object().ok_or("invalid surface expectation")? {
+                let surface = store.get(id);
+                let actual = match (field.as_str(), surface) {
+                    ("exists", _) => Value::Bool(surface.is_some()),
+                    ("sendDataModel", Some(surface)) => Value::Bool(surface.send_data_model()),
+                    ("components", Some(surface)) => serde_json::to_value(surface.components())?,
+                    ("dataModel", Some(surface)) => surface.data_model().root().clone(),
+                    _ => return Err(format!("cannot verify {field} on {id}").into()),
+                };
+                if actual != *expected {
+                    return Err(format!("{id}.{field}: expected {expected}, got {actual}").into());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn execute_data_model_case(case: &Case) -> Result<(), TestError> {
