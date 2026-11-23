@@ -6,9 +6,12 @@ use std::error::Error;
 use std::fmt::Write;
 use std::fs;
 use std::path::{Component, Path};
+use std::thread;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+type TaskError = Box<dyn Error + Send + Sync>;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,16 +35,23 @@ struct Case {
     protocol_version: Option<String>,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), TaskError> {
     let arguments: Vec<String> = env::args().skip(1).collect();
     if arguments != ["upstream"] {
         return Err("usage: cargo xtask upstream".into());
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    audit(&root)
+    // Deep upstream fixtures exceed the default Windows main-thread stack.
+    let worker = thread::Builder::new()
+        .name("upstream-audit".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || audit(&root))?;
+    worker
+        .join()
+        .map_err(|_| "upstream audit worker panicked")?
 }
 
-fn audit(root: &Path) -> Result<(), Box<dyn Error>> {
+fn audit(root: &Path) -> Result<(), TaskError> {
     let upstream = root.join("fixtures/upstream");
     let manifest: Manifest = serde_json::from_slice(&fs::read(upstream.join("manifest.json"))?)?;
     if manifest.repository != "https://github.com/a2ui-project/a2ui"

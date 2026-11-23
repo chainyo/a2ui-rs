@@ -13,6 +13,8 @@ The bootstrap tests only the public protocol version type.
 The command labels cases as pending or outside scope for an explicitly declared legacy protocol.
 Its success means the reference files are intact and readable.
 It does not mean the SDK implements their behavior.
+The audit uses a worker with a 16 MiB stack for deeply nested upstream fixtures.
+This permits the same inventory check on Windows, Linux, and macOS.
 Shared suites can contain legacy steps even when a case has no protocol version.
 A future runner must classify those steps explicitly before executing the case.
 
