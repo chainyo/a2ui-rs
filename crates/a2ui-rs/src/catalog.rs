@@ -13,6 +13,26 @@ use crate::protocol::{Component, FunctionCall, Metadata};
 const CATALOG: &str = "https://a2ui.org/specification/v1_0/catalog.json";
 const COMMON: &str = "https://a2ui.org/specification/v1_0/common_types.json";
 
+pub(crate) struct ChildReference<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) field: String,
+    pub(crate) collection: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PropertyKind {
+    Action,
+    String,
+    Number,
+    Boolean,
+}
+
+#[derive(Default)]
+pub(crate) struct PayloadShape<'a> {
+    pub(crate) children: Vec<ChildReference<'a>>,
+    pub(crate) properties: BTreeMap<*const Value, PropertyKind>,
+}
+
 /// An immutable catalog with compiled component and function schemas.
 pub struct Catalog {
     id: String,
@@ -158,8 +178,16 @@ impl Catalog {
         &self.document["components"][name]
     }
 
+    pub(crate) fn function_schema(&self, name: &str) -> &Value {
+        &self.document["functions"][name]
+    }
+
     pub(crate) fn is_agent_only(&self, name: &str) -> bool {
         self.document["functions"][name]["allowedCallers"] == "agentOnly"
+    }
+
+    pub(crate) fn requires_activation(&self, name: &str) -> bool {
+        self.document["functions"][name]["requiresUserActivation"] == true
     }
 
     pub(crate) fn child_references<'a>(
@@ -168,8 +196,21 @@ impl Catalog {
         payload: &'a Value,
     ) -> BTreeMap<&'a str, String> {
         let mut references = BTreeMap::new();
+        for child in self.inspect_payload(schema, payload).children {
+            references.entry(child.id).or_insert(child.field);
+        }
+        references
+    }
+
+    pub(crate) fn inspect_payload<'a>(
+        &'a self,
+        schema: &'a Value,
+        payload: &'a Value,
+    ) -> PayloadShape<'a> {
+        let mut shape = PayloadShape::default();
         let mut candidates = vec![(schema, payload, false, String::new())];
         let mut visited = BTreeSet::new();
+        let mut fields = BTreeSet::new();
         while let Some((schema, data, common, path)) = candidates.pop() {
             if !visited.insert((std::ptr::from_ref(schema), std::ptr::from_ref(data))) {
                 continue;
@@ -177,25 +218,46 @@ impl Catalog {
             if let Some(reference) = schema["$ref"].as_str() {
                 let (pointer, common) =
                     common_ref(reference).map_or((reference, common), |pointer| (pointer, true));
-                if common && pointer == "#/$defs/ComponentId" {
-                    if let Some(id) = data.as_str() {
-                        references.entry(id).or_insert_with(|| path.clone());
+                let kind = match (common, pointer) {
+                    (true, "#/$defs/Action") => Some(PropertyKind::Action),
+                    (true, "#/$defs/DynamicString") => Some(PropertyKind::String),
+                    (true, "#/$defs/DynamicNumber") => Some(PropertyKind::Number),
+                    (true, "#/$defs/DynamicBoolean") => Some(PropertyKind::Boolean),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    shape.properties.insert(std::ptr::from_ref(data), kind);
+                    continue;
+                }
+                let child = match (common, pointer) {
+                    (true, "#/$defs/ComponentId") => data.as_str().map(|id| (id, None)),
+                    (true, "#/$defs/ChildList") => data["componentId"]
+                        .as_str()
+                        .zip(data["path"].as_str())
+                        .map(|(id, path)| (id, Some(path))),
+                    _ => None,
+                };
+                if let Some((id, collection)) = child {
+                    if fields.insert((path.clone(), id)) {
+                        let field = if collection.is_some() {
+                            format!("{path}.componentId")
+                        } else {
+                            path
+                        };
+                        shape.children.push(ChildReference {
+                            id,
+                            field,
+                            collection,
+                        });
                     }
-                } else if let Some(pointer) = pointer.strip_prefix('#')
-                    && let Ok(pointer) = percent_decode_str(pointer).decode_utf8()
-                {
-                    let document = if common {
-                        &self.common_types
-                    } else {
-                        &self.document
-                    };
-                    if let Some(target) = document.pointer(&pointer) {
-                        candidates.push((target, data, common, path.clone()));
-                    }
+                    continue;
+                }
+                if let Some(target) = self.schema_target(pointer, common) {
+                    candidates.push((target, data, common, path.clone()));
                 }
             }
             if let Some(properties) = schema["properties"].as_object() {
-                for (key, property) in properties {
+                for (key, property) in properties.iter().rev() {
                     if let Some(value) = data.get(key) {
                         let field = if path.is_empty() {
                             key.clone()
@@ -225,7 +287,19 @@ impl Catalog {
                 }
             }
         }
-        references
+        shape
+    }
+
+    fn schema_target(&self, reference: &str, common: bool) -> Option<&Value> {
+        let pointer = percent_decode_str(reference.strip_prefix('#')?)
+            .decode_utf8()
+            .ok()?;
+        let document = if common {
+            &self.common_types
+        } else {
+            &self.document
+        };
+        document.pointer(&pointer)
     }
 }
 

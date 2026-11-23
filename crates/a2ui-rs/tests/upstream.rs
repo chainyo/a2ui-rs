@@ -16,6 +16,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "upstream/resolution.rs"]
+mod resolution;
 #[path = "upstream/validation.rs"]
 mod validation;
 
@@ -44,6 +46,12 @@ struct Case {
     messages: Option<Value>,
     #[serde(rename = "expectError")]
     expect_error: Option<Value>,
+    input: Option<Value>,
+    args: Option<Value>,
+    function: Option<String>,
+    surface: Option<Value>,
+    #[serde(rename = "expect_error")]
+    parse_error: Option<Value>,
     #[serde(default)]
     steps: Vec<Value>,
 }
@@ -204,7 +212,7 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn supports_case(suite: &str, case: &Case) -> bool {
-    if validation::supports(suite, case) {
+    if validation::supports(suite, case) || resolution::supports(suite, case) {
         return true;
     }
     if suite == SURFACE_SUITE {
@@ -249,6 +257,8 @@ fn supports_case(suite: &str, case: &Case) -> bool {
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     if validation::supports(suite, case) {
         validation::execute(upstream, case)
+    } else if resolution::supports(suite, case) {
+        resolution::execute(upstream, case)
     } else if is_data_model_suite(suite) {
         execute_data_model_case(case)
     } else if suite == SURFACE_SUITE {

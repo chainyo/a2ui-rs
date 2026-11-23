@@ -81,6 +81,24 @@ A null write removes an object field or sets an array position to null.
 A null write to the root replaces the data with an empty object.
 A null write to a missing path leaves the data unchanged.
 
+## Binding and expression resolution
+
+Use `DataScope::default` for the root data scope.
+Use `DataScope::collection` to get one scope per array item.
+An absolute path starts at the root. A relative path starts at the current scope.
+Use `MessageProcessor::write_binding` to write data from a renderer input.
+
+Use `MessageProcessor::resolve_value` to evaluate a binding or expression in one scope.
+Use `MessageProcessor::resolve_components` to get a snapshot of the component tree.
+The snapshot expands collection templates and keeps actions for event dispatch.
+Read a new snapshot after the surface data changes.
+
+Register renderer function handlers with `LocalFunctions::insert`.
+Use the catalog ID and function name for each registration.
+The processor checks calls against the catalog schemas before it invokes handlers.
+The SDK evaluates `formatString` and the collection function `@index`.
+Calls in a `formatString` template use its catalog. The system function `@index` uses the nearest collection scope.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.
