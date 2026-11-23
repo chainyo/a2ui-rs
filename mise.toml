@@ -12,15 +12,13 @@ lockfile_platforms = ["linux-x64", "macos-x64", "macos-arm64", "windows-x64"]
 "github:astral-sh/hawk" = { version = "0.1.9", os = ["linux", "macos"], matching = "cargo-hawk" }
 
 [tasks.check]
-description = "Run workspace quality checks"
+description = "Run formatting, lint, build, and dependency checks"
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = [
   "actionlint",
   "cargo fmt --all -- --check",
   "cargo check-all",
   "cargo clippy-all",
-  "cargo test-all",
-  "cargo test --workspace --doc --locked",
   "cargo doc --workspace --no-deps --locked",
   "cargo deny --locked check",
 ]

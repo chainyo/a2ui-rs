@@ -31,8 +31,9 @@ Run the same quality task as CI:
 mise run check
 ```
 
-The task runs formatting, all-target checks, Clippy, integration tests, documentation tests, Rustdoc, actionlint, and cargo-deny.
-For focused test runs, use:
+The task runs formatting, all-target build checks, Clippy, Rustdoc, actionlint, and cargo-deny.
+It compiles test targets without executing tests.
+Run tests locally for behavior changes and before a package release:
 
 ```sh
 mise run test
@@ -46,8 +47,10 @@ Mise also provides pinned Kingfisher for the required pre-commit scan:
 mise exec -- kingfisher scan . --staged --quiet --redact --no-validate --no-update-check
 ```
 
-CI initializes the submodule and runs the Rust tests on Linux, macOS, and Windows.
-CI runs the full quality task on Linux.
+PR and main-branch CI run the quality task on Linux without executing tests or initializing the submodule.
+[Package validation](.github/workflows/package-validation.yml) runs integration and documentation tests on Linux, macOS, and Windows when a `v*` tag is pushed.
+A publishing workflow can call package validation and require its success before publication.
+There is no package publisher yet. The crate remains marked `publish = false`.
 CI does not run Hawk because this workspace contains only an external library.
 Do not add an artificial binary to make its closed-world analysis applicable.
 
@@ -59,6 +62,18 @@ Keep supported platforms in the lockfile and review checksum changes.
 Run `mise install --locked` and `mise run check` before submitting an update.
 Dependabot maintains Cargo dependencies, CI actions, and the upstream submodule.
 Mise tool pins require a reviewed manual update.
+
+## Release validation
+
+Run the release tests locally with the pinned submodule initialized:
+
+```sh
+git submodule update --init
+mise run test
+```
+
+Version tags identify SDK releases. They do not identify the A2UI protocol version.
+Create a release tag only when a release is explicitly requested.
 
 ## Fixtures
 

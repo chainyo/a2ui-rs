@@ -40,7 +40,7 @@ GPUI is a possible adapter. It is not a Core SDK dependency.
 
 ## Public API checks
 
-Integration tests exercise the public crate.
+Integration tests exercise the public crate during local validation and package-release validation.
 Rustdoc checks public documentation. Clippy checks all targets.
 The upstream audit runs as an integration test with dev-dependencies.
 Its YAML parser is a dev-dependency. The SDK runtime does not depend on Git or the upstream checkout.
