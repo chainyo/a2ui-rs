@@ -99,6 +99,30 @@ The processor checks calls against the catalog schemas before it invokes handler
 The SDK evaluates `formatString` and the collection function `@index`.
 Calls in a `formatString` template use its catalog. The system function `@index` uses the nearest collection scope.
 
+## Bidirectional RPC
+
+Create one `RpcHandler` for each transport session.
+Send incoming messages through `RpcHandler::receive` or `RpcHandler::receive_json`.
+Send each returned renderer message on the transport.
+Use `ReceiveError::renderer_error` to get a correlated error for an invalid RPC envelope.
+
+Use `RpcHandler::call_agent_function` for a renderer-initiated call.
+Supply a function call ID that the session has never used.
+Supply an outbound callback to send the request. Report transport failures through this callback.
+The returned `PendingCall` completes when the handler receives the matching response.
+Cancel a pending call explicitly or drop its handle.
+
+Use `RpcHandler::next_deadline` to schedule a timer. Call `RpcHandler::expire` when the timer expires.
+Use the same monotonic clock for incoming messages and deadlines.
+The default timeout is 30 seconds.
+Surface deletion cancels pending calls for that surface.
+Disposal cancels all pending calls and closes the session.
+
+The handler resolves arguments in the named surface. A renderer call without a surface uses an empty data model.
+The handler checks catalog permissions before it calls a renderer function.
+An agent cannot invoke a function that requires user activation.
+Use `CallOptions` to mark a renderer-initiated call that comes from an active user gesture.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.

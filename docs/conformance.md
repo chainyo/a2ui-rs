@@ -9,6 +9,8 @@ Catalog cases load schemas with `Catalog::from_json`.
 Validation cases send decoded messages to `MessageProcessor::apply_with_config`.
 Parser cases send templates to `expression::parse_template`.
 Resolution cases use `MessageProcessor` to read resolved properties and check function calls.
+RPC cases use `RpcHandler` to send calls and receive responses.
+The RPC tests advance a monotonic clock to check timeouts.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.
