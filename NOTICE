@@ -1,7 +1,0 @@
-a2ui-rust
-
-Tests use the A2UI repository through a pinned Git submodule.
-Upstream repository: https://github.com/a2ui-project/a2ui
-Copyright Google LLC and the A2UI contributors.
-The upstream repository contains its own license and attribution notices.
-The parent Git repository records the upstream commit at fixtures/upstream.

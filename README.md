@@ -32,4 +32,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and all validation commands.
 
 ## License
 
-[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for upstream attribution.
+[Apache License 2.0](LICENSE).
