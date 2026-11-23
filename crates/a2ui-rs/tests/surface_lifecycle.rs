@@ -87,3 +87,31 @@ fn applies_the_surface_lifecycle() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
+
+#[test]
+fn replaces_component_definitions_and_rejects_duplicate_batches() -> Result<(), Box<dyn Error>> {
+    let [create, update, duplicate] = serde_json::from_str::<[AgentToRendererMessage; 3]>(
+        include_str!("../../../fixtures/local/component-updates.json"),
+    )?;
+    let mut store = SurfaceStore::default();
+    store.apply(create)?;
+    store.apply(update)?;
+
+    let surface = store.get("checkout").ok_or("missing checkout surface")?;
+    assert_eq!(
+        serde_json::to_value(surface.components())?,
+        json!([
+            {"id": "root", "component": "Column", "children": ["summary", "total"]},
+            {"id": "summary", "component": "Row", "children": []},
+            {"id": "total", "component": "Text", "text": "$24.00"}
+        ])
+    );
+
+    let before = store.clone();
+    assert_eq!(
+        store.apply(duplicate),
+        Err(SurfaceError::DuplicateComponent("total".to_owned()))
+    );
+    assert_eq!(store, before);
+    Ok(())
+}

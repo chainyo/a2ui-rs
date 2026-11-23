@@ -1,7 +1,7 @@
 //! Surface storage for the A2UI lifecycle.
 
-use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
@@ -13,7 +13,8 @@ use crate::protocol::{AgentToRenderer, AgentToRendererMessage, Component, Compon
 pub struct Surface {
     catalog_id: Option<String>,
     send_data_model: bool,
-    components: Option<Components>,
+    components: Vec<Component>,
+    component_indices: BTreeMap<String, usize>,
     data_model: DataModel,
     metadata: Option<Metadata>,
 }
@@ -31,10 +32,10 @@ impl Surface {
         self.send_data_model
     }
 
-    /// Returns the component definitions from the create message.
+    /// Returns current component definitions in order of insertion.
     #[must_use]
     pub fn components(&self) -> &[Component] {
-        self.components.as_ref().map_or(&[], Components::as_slice)
+        &self.components
     }
 
     /// Returns the surface data model.
@@ -47,6 +48,26 @@ impl Surface {
     #[must_use]
     pub fn metadata(&self) -> Option<&Metadata> {
         self.metadata.as_ref()
+    }
+
+    fn apply_components(&mut self, components: Components) -> Result<(), SurfaceError> {
+        let mut ids = BTreeSet::new();
+        for component in components.as_slice() {
+            if !ids.insert(component.id.as_str()) {
+                return Err(SurfaceError::DuplicateComponent(component.id.clone()));
+            }
+        }
+
+        for component in components.into_vec() {
+            if let Some(&index) = self.component_indices.get(&component.id) {
+                self.components[index] = component;
+            } else {
+                self.component_indices
+                    .insert(component.id.clone(), self.components.len());
+                self.components.push(component);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -63,15 +84,16 @@ impl SurfaceStore {
         self.surfaces.get(surface_id)
     }
 
-    /// Applies one create, data update, or delete message.
+    /// Applies one create, component update, data update, or delete message.
     ///
     /// A delete of an absent surface leaves the store unchanged.
     /// After deletion, a create message can use the same ID.
     ///
     /// # Errors
     ///
-    /// Returns an error for a duplicate create, an invalid data update, or an
-    /// operation outside the surface lifecycle. An error leaves the store unchanged.
+    /// Returns an error for duplicate surface or component IDs, an update to an absent
+    /// surface, an invalid data update, or an unsupported operation.
+    /// An error leaves the store unchanged.
     pub fn apply(&mut self, message: AgentToRendererMessage) -> Result<(), SurfaceError> {
         let AgentToRendererMessage::V1(operation) = message;
         match operation {
@@ -81,15 +103,26 @@ impl SurfaceStore {
                         return Err(SurfaceError::DuplicateSurface(entry.key().clone()));
                     }
                     Entry::Vacant(entry) => {
-                        entry.insert(Surface {
+                        let mut surface = Surface {
                             catalog_id: create.catalog_id,
                             send_data_model: create.send_data_model.unwrap_or_default(),
-                            components: create.components,
+                            components: Vec::new(),
+                            component_indices: BTreeMap::new(),
                             data_model: DataModel::new(create.data_model.unwrap_or_default()),
                             metadata: create.metadata,
-                        });
+                        };
+                        if let Some(components) = create.components {
+                            surface.apply_components(components)?;
+                        }
+                        entry.insert(surface);
                     }
                 }
+            }
+            AgentToRenderer::UpdateComponents(update) => {
+                let Some(surface) = self.surfaces.get_mut(&update.surface_id) else {
+                    return Err(SurfaceError::UnknownSurface(update.surface_id));
+                };
+                surface.apply_components(update.components)?;
             }
             AgentToRenderer::UpdateDataModel(update) => {
                 let Some(surface) = self.surfaces.get_mut(&update.surface_id) else {
@@ -118,6 +151,9 @@ pub enum SurfaceError {
     /// The create message used an active surface ID.
     #[error("Surface '{0}' already exists")]
     DuplicateSurface(String),
+    /// A message included the same component ID more than once.
+    #[error("Duplicate component ID '{0}'")]
+    DuplicateComponent(String),
     /// The update message used an absent surface ID.
     #[error("Surface '{0}' does not exist")]
     UnknownSurface(String),

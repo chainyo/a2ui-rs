@@ -1,0 +1,33 @@
+[
+  {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "checkout",
+      "components": [
+        {"id": "root", "component": "Column", "children": ["summary", "total"]},
+        {"id": "summary", "component": "Text", "text": "Draft", "@metadata": {"extensions": {"editable": true}}}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "checkout",
+      "components": [
+        {"id": "total", "component": "Text", "text": "$24.00"},
+        {"id": "summary", "component": "Row", "children": []}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "checkout",
+      "components": [
+        {"id": "summary", "component": "Text", "text": "Unconfirmed"},
+        {"id": "total", "component": "Text", "text": "$25.00"},
+        {"id": "total", "component": "Text", "text": "$26.00"}
+      ]
+    }
+  }
+]
