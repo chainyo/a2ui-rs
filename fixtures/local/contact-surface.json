@@ -1,0 +1,16 @@
+[
+  {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "contact",
+      "components": [
+        {"id": "root", "component": "Column", "children": ["name"]},
+        {"id": "name", "component": "Text", "text": {"@path": "/name"}}
+      ],
+      "dataModel": {"name": "Ada"}
+    }
+  },
+  {"version": "1.0", "updateComponents": {"surfaceId": "contact", "components": [{"id": "name", "component": "Text", "text": {"@path": "/name"}}]}},
+  {"version": "1.0", "updateDataModel": {"surfaceId": "contact", "path": "/name", "value": "Grace"}},
+  {"version": "1.0", "deleteSurface": {"surfaceId": "contact"}}
+]
