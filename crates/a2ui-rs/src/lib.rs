@@ -1,7 +1,7 @@
 //! Framework-independent foundations for A2UI v1.0 and later.
 //!
-//! The [`wire`] module contains v1.0 message envelopes and catalog-independent
-//! payload types. State processing and catalog validation are not implemented.
+//! The [`protocol`] module contains v1.0 message envelopes and catalog-independent
+//! payload types for serialization and deserialization.
 //!
 //! ```
 //! use a2ui_rs::ProtocolVersion;
@@ -15,7 +15,7 @@
 //! A typed message serializes with the required protocol tag:
 //!
 //! ```
-//! use a2ui_rs::wire::{AgentToRenderer, AgentToRendererMessage, DeleteSurface};
+//! use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage, DeleteSurface};
 //!
 //! let message = AgentToRendererMessage::V1(AgentToRenderer::DeleteSurface(
 //!     DeleteSurface { surface_id: "contact".to_owned() },
@@ -71,4 +71,4 @@ pub struct UnsupportedVersion {
     version: String,
 }
 
-pub mod wire;
+pub mod protocol;

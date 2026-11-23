@@ -1,10 +1,10 @@
-//! Tests the public v1.0 wire boundary without a renderer or state engine.
+//! Tests the public v1.0 protocol boundary without a renderer or state engine.
 
 use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use a2ui_rs::wire::{
+use a2ui_rs::protocol::{
     Action, AgentToRenderer, AgentToRendererMessage, GenericError, MessageBatch,
     RendererToAgentMessage,
 };

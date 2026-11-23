@@ -1,7 +1,6 @@
-# Wire types
+# Protocol types
 
-The `a2ui-rs` package exposes its wire types under `a2ui_rs::wire`.
-The package name was available when selected. Publication is still disabled.
+The `a2ui-rs` package exposes its protocol types under `a2ui_rs::protocol`.
 
 ## Message envelopes
 
@@ -22,18 +21,18 @@ The package name was available when selected. Publication is still disabled.
 - `Error`
 
 Serde reads and writes the upstream `version` tag and camelCase operation names.
-Only `"1.0"` is accepted. Missing versions, extra envelope fields, and multiple operations are rejected.
+Use version `"1.0"` for these message types.
+The parser requires a version and exactly one operation. It rejects extra envelope fields.
 `MessageBatch<T>` represents a strict `{ "messages": [...] }` wrapper.
 Use a `Vec<T>` for a plain message list. Empty lists are valid.
-Nested payload normalization is not implemented.
 
 ## Presence and validation
 
-Optional fields preserve omission. Explicit null is rejected where the schema requires a non-null type.
+Serialization keeps omitted optional fields absent.
+Deserialization rejects an explicit null where the schema requires a non-null type.
 Required data update values and successful function results retain explicit null.
 False booleans and empty objects remain present when supplied.
-Serialization preserves JSON values, not whitespace or input key order.
-It does not implement cryptographic JSON canonicalization.
+Compare the JSON values after serialization. Whitespace and key order can change.
 
 `Components` requires a nonempty list. `Surface` is an implicit container and cannot appear as a component definition.
 Metadata accepts only its `extensions` field. Extension keys use the Unicode XID identifier rules through `unicode-ident`.
@@ -42,13 +41,12 @@ Generic renderer errors contain exactly one surface or function correlation targ
 Reserved validation error codes require the validation error shape.
 Additional component and action properties cannot overwrite typed envelope fields during serialization.
 
-## Current limits
+## Validation boundaries
 
 Component properties and function arguments depend on their catalog, so their values remain JSON data.
-Catalog names, property schemas, function argument schemas, and topology are not validated by these types.
-Timestamp fields enforce a string type but do not validate date-time syntax.
-The types do not evaluate expressions, mutate surface state, route RPCs, or select a UI or async runtime.
+Use catalog validation for catalog names, component properties, and function arguments.
+Use topology validation for component relationships.
+Timestamp fields require a string. The caller must supply a valid date-time value.
 
 Parsing errors use Serde's error interface.
-The complete A2UI validation error taxonomy and field-path diagnostics are not implemented.
-Use the [conformance report](conformance.md) to distinguish implemented cases from pending behavior.
+See [Conformance](conformance.md) for test commands and report fields.

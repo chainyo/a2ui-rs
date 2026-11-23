@@ -1,8 +1,8 @@
 # Fixtures
 
 `local/` contains small project-owned message examples.
-The contact example covers create, component update, data update, and surface deletion.
-The bootstrap reads only its version fields. It does not process its lifecycle.
+The contact example contains a create message and a delete message.
+It also contains component and data updates.
 
 `upstream/` is the official A2UI repository as a pinned Git submodule.
 Initialize it with `git submodule update --init` before running tests.

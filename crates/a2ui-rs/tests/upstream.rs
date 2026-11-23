@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
-use a2ui_rs::wire::{Extensions, FunctionResponse};
+use a2ui_rs::protocol::{Extensions, FunctionResponse};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -117,7 +117,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 )
             };
             records.push(Record {
-                harness: "a2ui-rs-wire",
+                harness: "a2ui-rs-protocol",
                 suite: suite_name.clone(),
                 case: case.name,
                 status,
@@ -136,7 +136,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
         .collect::<Result<Vec<_>, _>>()?
         .join("\n")
         + "\n";
-    fs::write(target.join("wire.jsonl"), manifest)?;
+    fs::write(target.join("protocol.jsonl"), manifest)?;
     println!(
         "Upstream {revision}: {} Core suites. {passed} passed, {} failed, {pending} pending, {out_of_scope} legacy cases outside scope.",
         suites.len(),
@@ -201,7 +201,7 @@ fn validate_step<T: DeserializeOwned + Serialize>(step: &Value) -> Result<(), Te
             return Err(format!("accepted invalid input: {value}").into());
         }
     } else if serde_json::to_value(native?)? != *value {
-        return Err("serialization did not preserve the wire value".into());
+        return Err("serialization did not preserve the JSON value".into());
     }
     Ok(())
 }

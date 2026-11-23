@@ -9,12 +9,12 @@ The protocol contract starts at v1.0. Legacy adapters are outside scope.
 ## Dependency direction
 
 ```text
-Future agent helpers ──> a2ui-rs <── Future framework adapters
-                              ↑
-                       Application code
+Agent helpers ──> a2ui-rs <── Framework adapters
+                     ↑
+              Application code
 ```
 
-Core will own these responsibilities from the upstream blueprint:
+The upstream Core blueprint defines these responsibilities.
 
 - Protocol models and serialization.
 - Catalog schemas and component metadata.
@@ -24,7 +24,6 @@ Core will own these responsibilities from the upstream blueprint:
 - Structural validation, reference checks, and recursion checks.
 - Multiple catalogs and v1.0 bidirectional function RPC lifecycle.
 
-The version boundary and v1.0 wire types are implemented. State, catalog validation, processing, resolution, and RPC behavior remain pending.
 Add modules as these responsibilities acquire tested behavior.
 Do not add a separate crate for each module without a concrete need.
 
@@ -32,24 +31,22 @@ Core must remain independent of host UI frameworks, network clients, model provi
 Use explicit caller-owned interfaces when a host service becomes necessary.
 Do not select an async runtime before the RPC contract requires an integration boundary.
 
-## Future layers
+## SDK layers
 
-Agent helpers will own capability negotiation, prompts, inference compilation, and outgoing validation through core.
-Framework adapters will map resolved state to native widgets and route user events.
-GPUI is a possible adapter. It is not a Core SDK dependency.
+Agent helpers are responsible for capability negotiation, prompts, and inference compilation.
+They use the core to validate outgoing messages.
+Framework adapters map resolved state to native widgets. They also route user events.
 
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.
 Rustdoc checks public documentation. Clippy checks all targets.
-The upstream integration test executes supported common-type cases and reports the remaining coverage.
-Wire types are described in [Wire types](wire.md).
-Its YAML parser is a dev-dependency. The SDK runtime does not depend on Git or the upstream checkout.
+The upstream integration test uses Git and a YAML parser.
+The YAML parser is a dev-dependency.
+See [Protocol types](protocol.md) for the message types.
 
-Hawk assumes that product callers live inside the workspace.
-This workspace contains only a public library, so there is no suitable Hawk target.
-Mise provides the pinned Hawk release on Linux and macOS for future internal products.
-Do not add an artificial binary or restrict the public SDK to satisfy Hawk.
+Run Hawk only for an internal product with a suitable analysis target.
+Keep the public SDK available to callers outside the workspace.
 
 ## Repository precedent
 

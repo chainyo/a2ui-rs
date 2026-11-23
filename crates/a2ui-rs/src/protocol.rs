@@ -1,7 +1,7 @@
-//! A2UI v1.0 wire messages and catalog-independent payload types.
+//! A2UI v1.0 messages and catalog-independent payload types.
 //!
 //! Catalog-defined component properties and function arguments remain JSON data.
-//! These types do not validate catalogs, evaluate expressions, or process state.
+//! Use the corresponding SDK layers for catalog validation and state processing.
 
 use std::collections::BTreeMap;
 
@@ -188,7 +188,7 @@ pub struct Component {
 pub struct Components(Vec<Component>);
 
 impl Components {
-    /// Returns the component definitions in wire order.
+    /// Returns the component definitions in message order.
     #[must_use]
     pub fn as_slice(&self) -> &[Component] {
         &self.0
@@ -196,10 +196,10 @@ impl Components {
 }
 
 impl TryFrom<Vec<Component>> for Components {
-    type Error = WireError;
+    type Error = ProtocolError;
     fn try_from(components: Vec<Component>) -> Result<Self, Self::Error> {
         if components.is_empty() {
-            return Err(WireError::EmptyComponents);
+            return Err(ProtocolError::EmptyComponents);
         }
         Ok(Self(components))
     }
@@ -232,7 +232,7 @@ impl Extensions {
 }
 
 impl TryFrom<JsonObject> for Extensions {
-    type Error = WireError;
+    type Error = ProtocolError;
     fn try_from(values: JsonObject) -> Result<Self, Self::Error> {
         for key in values.keys() {
             let mut characters = key.chars();
@@ -241,7 +241,7 @@ impl TryFrom<JsonObject> for Extensions {
                 .is_some_and(|character| character == '_' || unicode_ident::is_xid_start(character))
                 || !characters.all(unicode_ident::is_xid_continue)
             {
-                return Err(WireError::InvalidExtensionKey(key.clone()));
+                return Err(ProtocolError::InvalidExtensionKey(key.clone()));
             }
         }
         Ok(Self(values))
@@ -306,7 +306,7 @@ pub enum Dynamic<T> {
     Function(FunctionCall),
 }
 
-/// A binding expression. Resolution is outside the wire layer.
+/// A binding expression. Resolution is outside the protocol layer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DataBinding {
@@ -655,9 +655,9 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-/// A catalog-independent wire value failed validation.
+/// A catalog-independent JSON value failed validation.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum WireError {
+pub enum ProtocolError {
     /// A component list was empty.
     #[error("component lists must not be empty")]
     EmptyComponents,

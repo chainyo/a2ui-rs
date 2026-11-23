@@ -1,10 +1,9 @@
 # Implementation plan
 
-The bootstrap establishes repository checks and a public version boundary.
-Each later step must use the pinned blueprint and upstream cases for its behavior contract.
+Use the pinned blueprint and upstream cases to define the behavior for each step.
 
-1. Typed v1.0 messages and Serde serialization are implemented.
-   Initial coverage includes common-type conformance cases and renderer schema fixtures.
+1. Define typed v1.0 messages and Serde serialization.
+   Use common-type conformance cases and renderer schema fixtures.
 2. Add data models and scoped JSON Pointer operations.
    Test replacement, deletion, notification, and disposal behavior.
 3. Add surface and component state with message processing.
@@ -15,7 +14,7 @@ Each later step must use the pinned blueprint and upstream cases for its behavio
    Include collections, relative scopes, and local function validation.
 6. Add v1.0 bidirectional RPC behavior.
    Test correlation, permissions, cancellation, timeout, and disposal boundaries.
-7. Extend the current common-type runner and executed-case manifest to all Core actions.
+7. Use the Core runner and executed-case manifest for each Core action.
    Connect each action as its public implementation becomes available.
 8. Review package names, public APIs, documentation, and release policy.
    Keep publication disabled until this review is complete.
