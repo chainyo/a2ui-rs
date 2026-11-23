@@ -16,6 +16,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "upstream/validation.rs"]
+mod validation;
+
 type TestError = Box<dyn Error + Send + Sync>;
 
 #[derive(Deserialize)]
@@ -27,6 +30,16 @@ struct Case {
     action: String,
     definition: Option<String>,
     catalog: Option<Value>,
+    #[serde(rename = "catalogId")]
+    catalog_id: Option<String>,
+    #[serde(rename = "catalogPath")]
+    catalog_path: Option<String>,
+    #[serde(rename = "catalogPaths", default)]
+    catalog_paths: Vec<String>,
+    #[serde(rename = "strictMode")]
+    strict_mode: Option<bool>,
+    #[serde(rename = "validationConfig")]
+    validation_config: Option<a2ui_rs::validation::ValidationConfig>,
     expect: Option<Value>,
     messages: Option<Value>,
     #[serde(rename = "expectError")]
@@ -100,7 +113,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
-                match execute_supported_case(&suite_name, &case) {
+                match execute_supported_case(&upstream, &suite_name, &case) {
                     Ok(()) => {
                         passed += 1;
                         ("passed", None)
@@ -191,6 +204,9 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn supports_case(suite: &str, case: &Case) -> bool {
+    if validation::supports(suite, case) {
+        return true;
+    }
     if suite == SURFACE_SUITE {
         return case.action == "process_messages"
             && case.protocol_version.as_deref() == Some("1.0")
@@ -230,8 +246,10 @@ fn supports_case(suite: &str, case: &Case) -> bool {
         )
 }
 
-fn execute_supported_case(suite: &str, case: &Case) -> Result<(), TestError> {
-    if is_data_model_suite(suite) {
+fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
+    if validation::supports(suite, case) {
+        validation::execute(upstream, case)
+    } else if is_data_model_suite(suite) {
         execute_data_model_case(case)
     } else if suite == SURFACE_SUITE {
         execute_surface_case(case)
