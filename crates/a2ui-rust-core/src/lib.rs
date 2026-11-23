@@ -1,15 +1,29 @@
 //! Framework-independent foundations for A2UI v1.0 and later.
 //!
-//! This bootstrap exposes a protocol version type. Message validation, surface
-//! state, bindings, and RPC processing are not implemented.
+//! The [`wire`] module contains v1.0 message envelopes and catalog-independent
+//! payload types. State processing and catalog validation are not implemented.
 //!
 //! ```
-//! use a2ui_core::ProtocolVersion;
+//! use a2ui_rust_core::ProtocolVersion;
 //!
 //! let version: ProtocolVersion = "1.0".parse()?;
 //! assert_eq!(version, ProtocolVersion::V1_0);
 //! assert!("0.9".parse::<ProtocolVersion>().is_err());
-//! # Ok::<(), a2ui_core::UnsupportedVersion>(())
+//! # Ok::<(), a2ui_rust_core::UnsupportedVersion>(())
+//! ```
+
+//! A typed message serializes with the required protocol tag:
+//!
+//! ```
+//! use a2ui_rust_core::wire::{AgentToRenderer, AgentToRendererMessage, DeleteSurface};
+//!
+//! let message = AgentToRendererMessage::V1(AgentToRenderer::DeleteSurface(
+//!     DeleteSurface { surface_id: "contact".to_owned() },
+//! ));
+//! let json = serde_json::to_string(&message)?;
+//! let decoded: AgentToRendererMessage = serde_json::from_str(&json)?;
+//! assert_eq!(decoded, message);
+//! # Ok::<(), serde_json::Error>(())
 //! ```
 
 use std::fmt;
@@ -56,3 +70,5 @@ impl FromStr for ProtocolVersion {
 pub struct UnsupportedVersion {
     version: String,
 }
+
+pub mod wire;

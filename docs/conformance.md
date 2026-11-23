@@ -2,19 +2,38 @@
 
 ## Current coverage
 
-**No upstream behavioral conformance case runs against the Core SDK yet.**
-The bootstrap tests only the public protocol version type.
+The Core runner executes three v1.0 cases from `core/common_types.yaml`:
 
-The `upstream` integration test checks the Git submodule and inventories its Core suites:
+- `test_v10_extensions_keys_are_unicode_identifiers`
+- `test_v10_function_response_has_exactly_one_outcome`
+- `test_v10_function_response_rejects_null_error`
+
+Every positive and expected-error step in those cases runs through public Rust types.
+The executable common-type suite rejects non-finite YAML values instead of converting them to strings.
+Valid inputs must serialize to the same JSON value.
+Invalid inputs must fail deserialization. A serialization failure does not satisfy a rejection expectation.
+Detailed validation error paths are not asserted by these cases.
+
+The pinned Core inventory reports 3 passed, 702 pending, and 165 legacy cases outside scope.
+The test writes every case to `target/conformance/wire.jsonl` using the upstream executed-case manifest format.
+Unsupported actions and definitions are recorded as skipped with an explicit pending reason.
+Legacy cases are recorded as skipped with an outside-scope reason.
+A supported case failure is recorded as failed and fails the test.
+
+Run the Core harness with:
 
 ```sh
-cargo test --package a2ui-core --test upstream --locked -- --nocapture
+mise exec -- cargo test --package a2ui-rust-core --test upstream --locked -- --nocapture
 ```
 
-The test verifies that the checkout matches the recorded Git pin and has no local changes.
-It also checks required reference paths and lists every case in `conformance/core/*.yaml`.
-Cases are pending unless their suite or declared protocol version identifies legacy behavior outside scope.
-The inventory does not establish that the SDK implements those cases.
+The harness verifies the Git pin, clean checkout, and required reference paths before executing cases.
+It inventories every case in all 29 `conformance/core/*.yaml` suites.
+
+The wire tests also execute all 22 cases in the upstream `renderer_messages.json` and `function_response.json` specification fixtures.
+These check valid and invalid renderer envelopes and preserve valid values through serialization.
+They are separate from the Core YAML case counts.
+Other specification fixtures and all stateful processing behavior remain pending.
+The [wire API](wire.md) documents the current validation limits.
 
 The audit uses a worker with a 16 MiB stack for deeply nested upstream fixtures.
 The metadata parser permits nesting up to 256 levels to read legacy rejection fixtures.
@@ -53,7 +72,7 @@ Version example tests read the initialized submodule at runtime.
 Implement each case against the same public Core SDK used by applications.
 Do not add an alternative test-only state engine.
 
-A future runner must produce an executed-case manifest with these results:
+The runner uses these results. Its JSONL status is `skipped` for pending and outside-scope cases:
 
 | Result | Required evidence |
 | --- | --- |

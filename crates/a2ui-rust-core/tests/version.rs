@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
-use a2ui_core::ProtocolVersion;
+use a2ui_rust_core::ProtocolVersion;
 use serde::Deserialize;
 use serde_json::Value;
 

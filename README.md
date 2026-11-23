@@ -8,8 +8,8 @@ A framework-independent Rust SDK for [A2UI](https://a2ui.org/), targeting protoc
 
 ## Status
 
-Early development. Only the protocol version type is implemented.
-The runtime and upstream behavioral conformance tests are pending. No crates are published.
+Early development. `a2ui-rust-core` provides typed v1.0 messages, Serde support, and initial upstream conformance tests.
+The state engine and catalog validation are pending. No crates are published.
 
 ## Development
 
@@ -26,6 +26,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and all validation commands.
 
 ## Documentation
 
+- [Wire types](docs/wire.md)
 - [Architecture](docs/architecture.md)
 - [Conformance](docs/conformance.md)
 - [Implementation plan](docs/implementation-plan.md)

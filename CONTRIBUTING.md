@@ -37,7 +37,7 @@ Run tests locally for behavior changes and before a package release:
 
 ```sh
 mise run test
-mise exec -- cargo test --package a2ui-core --test upstream --locked
+mise exec -- cargo test --package a2ui-rust-core --test upstream --locked
 ```
 
 Use `mise exec -- COMMAND` to run a pinned tool without shell activation.
@@ -82,8 +82,8 @@ Include rejection cases and incremental message sequences when relevant.
 Use fictional data and public protocol identifiers.
 Tests must exercise production APIs instead of a test-only protocol implementation.
 
-The bootstrap version tests inspect message versions only.
-They do not validate the complete local or upstream message payloads.
+The version tests check protocol selection. Wire tests check typed envelopes and upstream renderer fixtures.
+The common-type runner executes supported upstream cases and reports all remaining cases with reasons.
 
 Upstream references live in a Git submodule. Do not edit its files.
 Update the pin only through the process in `docs/conformance.md`.
@@ -91,7 +91,8 @@ Do not replace negative expectations with successful examples.
 
 ## Dependencies
 
-The public Core SDK depends on Serde and `thiserror` 2.
+The public Core SDK uses Serde, serde_json, `thiserror` 2, and unicode-ident.
+JSON values preserve catalog-defined data. Unicode XID checks validate metadata extension keys.
 Keep YAML parsing in dev-dependencies for integration tests.
 Prefer maintained stable releases. Disable unnecessary default features.
 Commit `Cargo.lock` and review license, source, advisory, and duplicate-version checks.

@@ -9,7 +9,7 @@ The protocol contract starts at v1.0. Legacy adapters are outside scope.
 ## Dependency direction
 
 ```text
-Future agent helpers ──> a2ui-core <── Future framework adapters
+Future agent helpers ──> a2ui-rust-core <── Future framework adapters
                               ↑
                        Application code
 ```
@@ -24,7 +24,7 @@ Core will own these responsibilities from the upstream blueprint:
 - Structural validation, reference checks, and recursion checks.
 - Multiple catalogs and v1.0 bidirectional function RPC lifecycle.
 
-These are planned responsibilities. Only the version type is implemented.
+The version boundary and v1.0 wire types are implemented. State, catalog validation, processing, resolution, and RPC behavior remain pending.
 Add modules as these responsibilities acquire tested behavior.
 Do not add a separate crate for each module without a concrete need.
 
@@ -42,7 +42,8 @@ GPUI is a possible adapter. It is not a Core SDK dependency.
 
 Integration tests exercise the public crate during local validation and package-release validation.
 Rustdoc checks public documentation. Clippy checks all targets.
-The upstream audit runs as an integration test with dev-dependencies.
+The upstream integration test executes supported common-type cases and reports the remaining coverage.
+Wire types are described in [Wire types](wire.md).
 Its YAML parser is a dev-dependency. The SDK runtime does not depend on Git or the upstream checkout.
 
 Hawk assumes that product callers live inside the workspace.
