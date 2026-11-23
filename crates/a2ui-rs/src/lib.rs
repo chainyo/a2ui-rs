@@ -73,6 +73,8 @@ pub struct UnsupportedVersion {
 
 pub mod catalog;
 pub mod data_model;
+pub mod expression;
 pub mod protocol;
+pub mod resolution;
 pub mod surface;
 pub mod validation;

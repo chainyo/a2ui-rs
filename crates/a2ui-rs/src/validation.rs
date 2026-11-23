@@ -7,8 +7,12 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::catalog::{Catalog, CatalogError};
+use crate::expression::{Expression, parse_template};
 use crate::protocol::{
-    AgentToRenderer, AgentToRendererMessage, Component, Components, FunctionCall,
+    AgentToRenderer, AgentToRendererMessage, Component, Components, FunctionCall, UpdateDataModel,
+};
+use crate::resolution::{
+    DataScope, LocalFunctions, ResolveError, ResolvedComponent, Resolver, validate_call_shape,
 };
 use crate::surface::{Surface, SurfaceError, SurfaceStore};
 
@@ -82,6 +86,58 @@ impl MessageProcessor {
     #[must_use]
     pub fn get(&self, surface_id: &str) -> Option<&Surface> {
         self.store.get(surface_id)
+    }
+
+    /// Resolves a value against an active surface and data scope.
+    ///
+    /// # Errors
+    /// Returns an error if the surface is absent or the expression is invalid.
+    pub fn resolve_value(
+        &self,
+        surface_id: &str,
+        scope: &DataScope,
+        value: &Value,
+        functions: &LocalFunctions<'_>,
+    ) -> Result<Value, ResolveError> {
+        let surface = self
+            .get(surface_id)
+            .ok_or_else(|| SurfaceError::UnknownSurface(surface_id.to_owned()))?;
+        Resolver::new(surface, &self.catalogs, functions).value(scope, value)
+    }
+
+    /// Resolves a snapshot of the component instances below the root.
+    ///
+    /// # Errors
+    /// Returns an error if the surface is absent or a property cannot resolve.
+    pub fn resolve_components(
+        &self,
+        surface_id: &str,
+        functions: &LocalFunctions<'_>,
+    ) -> Result<Option<ResolvedComponent>, ResolveError> {
+        let surface = self
+            .get(surface_id)
+            .ok_or_else(|| SurfaceError::UnknownSurface(surface_id.to_owned()))?;
+        Resolver::new(surface, &self.catalogs, functions).component_tree(surface)
+    }
+
+    /// Writes a bound value to the surface data model.
+    ///
+    /// # Errors
+    /// Returns an error if the surface is absent or the data model rejects the write.
+    pub fn write_binding(
+        &mut self,
+        surface_id: &str,
+        scope: &DataScope,
+        path: &str,
+        value: Value,
+    ) -> Result<(), SurfaceError> {
+        self.store.apply(AgentToRendererMessage::V1(
+            AgentToRenderer::UpdateDataModel(UpdateDataModel {
+                surface_id: surface_id.to_owned(),
+                path: Some(scope.resolve_path(path)),
+                value,
+            }),
+        ))
     }
 
     /// Validates and applies one protocol message.
@@ -158,7 +214,7 @@ impl MessageProcessor {
             let catalog = self.catalog(component.catalog_id.as_deref().or(default_catalog))?;
             check_entry(catalog.validate_component(component), config)?;
             for property in component.properties.values() {
-                self.validate_calls(property, default_catalog, config, 0)?;
+                self.validate_calls(property, default_catalog, None, config, 0)?;
             }
         }
 
@@ -192,6 +248,7 @@ impl MessageProcessor {
         &self,
         value: &Value,
         default_catalog: Option<&str>,
+        template_catalog: Option<&str>,
         config: ValidationConfig,
         depth: usize,
     ) -> Result<(), ValidationError> {
@@ -199,27 +256,64 @@ impl MessageProcessor {
         while let Some((value, depth)) = nodes.pop() {
             match value {
                 Value::Object(object) if object.contains_key("@call") => {
-                    if depth == MAX_FUNCTION_DEPTH {
-                        return Err(ValidationError::FunctionDepth);
-                    }
                     let call: FunctionCall = serde_json::from_value(value.clone())
                         .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
-                    if call.name != "@index" {
-                        let catalog =
-                            self.catalog(call.catalog_id.as_deref().or(default_catalog))?;
-                        if catalog.is_agent_only(&call.name) {
-                            return Err(ValidationError::AgentOnlyFunction(call.name));
-                        }
-                        check_entry(catalog.validate_function(&call), config)?;
-                    }
-                    if let Some(args) = object.get("args").and_then(Value::as_object) {
-                        nodes.extend(args.values().map(|value| (value, depth + 1)));
-                    }
+                    self.validate_call(&call, default_catalog, template_catalog, config, depth)?;
                 }
                 Value::Object(object) => nodes.extend(object.values().map(|value| (value, depth))),
                 Value::Array(items) => nodes.extend(items.iter().map(|value| (value, depth))),
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    fn validate_call(
+        &self,
+        call: &FunctionCall,
+        default_catalog: Option<&str>,
+        template_catalog: Option<&str>,
+        config: ValidationConfig,
+        depth: usize,
+    ) -> Result<(), ValidationError> {
+        if depth >= MAX_FUNCTION_DEPTH {
+            return Err(ValidationError::FunctionDepth);
+        }
+        validate_call_shape(call)
+            .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
+        if call.name != "@index" {
+            let catalog = self.catalog(
+                call.catalog_id
+                    .as_deref()
+                    .or(template_catalog)
+                    .or(default_catalog),
+            )?;
+            if catalog.is_agent_only(&call.name) {
+                return Err(ValidationError::AgentOnlyFunction(call.name.clone()));
+            }
+            check_entry(catalog.validate_function(call), config)?;
+            if call.name == "formatString"
+                && let Some(template) = call
+                    .args
+                    .as_ref()
+                    .and_then(|args| args.get("value"))
+                    .and_then(Value::as_str)
+            {
+                for part in parse_template(template)? {
+                    if let Expression::Call(call) = part {
+                        self.validate_call(
+                            &call,
+                            default_catalog,
+                            Some(catalog.id()),
+                            config,
+                            depth + 1,
+                        )?;
+                    }
+                }
+            }
+        }
+        for value in call.args.iter().flat_map(serde_json::Map::values) {
+            self.validate_calls(value, default_catalog, template_catalog, config, depth + 1)?;
         }
         Ok(())
     }
@@ -446,4 +540,7 @@ pub enum ValidationError {
     /// A renderer expression calls a function reserved for the agent.
     #[error("Function '{0}' is agentOnly")]
     AgentOnlyFunction(String),
+    /// The local expression template is invalid.
+    #[error(transparent)]
+    Expression(#[from] crate::expression::ParseError),
 }

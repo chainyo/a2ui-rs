@@ -1,0 +1,117 @@
+{
+  "catalogs": [
+    {
+      "catalogId": "example:orders",
+      "protocolVersion": "1.0",
+      "components": {
+        "Column": {
+          "type": "object",
+          "properties": {"children": {"$ref": "common_types.json#/$defs/ChildList"}},
+          "required": ["children"]
+        },
+        "Order": {
+          "type": "object",
+          "properties": {
+            "text": {"$ref": "common_types.json#/$defs/DynamicString"},
+            "controls": {
+              "type": "object",
+              "properties": {"confirm": {"$ref": "common_types.json#/$defs/Action"}},
+              "required": ["confirm"]
+            }
+          },
+          "required": ["text", "controls"]
+        }
+      }
+    },
+    {
+      "catalogId": "example:display",
+      "protocolVersion": "1.0",
+      "functions": {
+        "formatString": {
+          "returnType": "string",
+          "properties": {
+            "args": {
+              "type": "object",
+              "properties": {"value": {"$ref": "common_types.json#/$defs/DynamicString"}},
+              "required": ["value"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["args"]
+        },
+        "decorate": {
+          "returnType": "string",
+          "properties": {
+            "args": {
+              "type": "object",
+              "properties": {"value": {"$ref": "common_types.json#/$defs/DynamicString"}},
+              "required": ["value"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["args"]
+        },
+        "label": {
+          "returnType": "string",
+          "properties": {
+            "args": {
+              "type": "object",
+              "properties": {
+                "name": {"$ref": "common_types.json#/$defs/DynamicString"},
+                "city": {"$ref": "common_types.json#/$defs/DynamicString"}
+              },
+              "required": ["name", "city"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["args"]
+        },
+        "confirm": {"returnType": "void", "requiresUserActivation": true}
+      }
+    }
+  ],
+  "create": {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "orders",
+      "catalogId": "example:orders",
+      "dataModel": {
+        "city": "London",
+        "count": 5,
+        "groups": [{"items": [{"name": "Tea"}, {"name": "Bread"}]}, {"items": [{"name": "Rice"}]}]
+      },
+      "components": [
+        {"id": "root", "component": "Column", "children": {"path": "/groups", "componentId": "group"}},
+        {"id": "group", "component": "Column", "children": {"path": "items", "componentId": "order"}},
+        {
+          "id": "order",
+          "component": "Order",
+          "text": {
+            "@call": "formatString",
+            "catalogId": "example:display",
+            "args": {"value": "#${@index(offset: 1)} ${decorate(value: label(name: name, city: /city))}"}
+          },
+          "controls": {"confirm": {"functionCall": {"@call": "confirm", "catalogId": "example:display"}}}
+        }
+      ]
+    }
+  },
+  "invalid": {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "orders",
+      "components": [
+        {
+          "id": "order",
+          "component": "Order",
+          "text": {
+            "@call": "formatString",
+            "catalogId": "example:display",
+            "args": {"value": "${label(name: 42, city: /city)}"}
+          },
+          "controls": {"confirm": {"functionCall": {"@call": "confirm", "catalogId": "example:display"}}}
+        }
+      ]
+    }
+  }
+}
