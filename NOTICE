@@ -1,0 +1,7 @@
+a2ui-rust
+
+This repository includes unmodified reference files from A2UI.
+Upstream repository: https://github.com/a2ui-project/a2ui
+Copyright Google LLC and the A2UI contributors.
+The upstream files are available under the Apache License, Version 2.0.
+See fixtures/upstream/manifest.json for the revision and file checksums.

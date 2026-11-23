@@ -1,0 +1,4 @@
+[[production]]
+package = "xtask"
+bin = "xtask"
+reason = "Repository maintenance binary. The public SDK is an external library boundary."

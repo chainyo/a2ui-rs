@@ -1,0 +1,5 @@
+[alias]
+xtask = "run --locked --package xtask --"
+xtask-check = "check --workspace --all-targets --all-features --locked"
+xtask-clippy = "clippy --workspace --all-targets --all-features --locked -- -D warnings"
+xtask-test = "test --workspace --all-targets --all-features --locked"
