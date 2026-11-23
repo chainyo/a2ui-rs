@@ -1,5 +1,5 @@
 [package]
-name = "a2ui-core"
+name = "a2ui-rs"
 description = "Framework-independent protocol and state foundations for A2UI v1.0 and later"
 version.workspace = true
 edition.workspace = true
@@ -14,7 +14,8 @@ workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
+unicode-ident.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 serde-saphyr.workspace = true

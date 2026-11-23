@@ -3,7 +3,7 @@
 ## Setup
 
 Install Git and [mise](https://mise.jdx.dev/).
-Use mise `2026.11.6` or later. CI uses `2026.11.6`.
+See `mise.toml` for the minimum mise version.
 
 ```sh
 mise trust
@@ -16,12 +16,11 @@ For a new checkout, `git clone --recurse-submodules` initializes the upstream re
 `mise.toml` pins cargo-deny, actionlint, ShellCheck, Kingfisher, and Hawk.
 `mise.lock` records their download URLs and checksums for Linux, macOS, and Windows.
 Mise reads the Rust version and components directly from `rust-toolchain.toml`.
-There is no second Rust version declaration in `mise.toml`.
-Hawk is available on Linux and macOS. Keep its version compatible with the Rust toolchain.
+Keep the Hawk version compatible with the Rust toolchain.
 ShellCheck checks workflow shell commands through actionlint.
 
 Read the [crate map](crates/README.md), [architecture](docs/architecture.md), and [conformance policy](docs/conformance.md) before structural changes.
-Use the [writing guide](docs/writing.md) for documentation and comments.
+Use ASD-STE100 for documentation and comments. Read the [writing guide](docs/writing.md).
 
 ## Validation
 
@@ -37,7 +36,7 @@ Run tests locally for behavior changes and before a package release:
 
 ```sh
 mise run test
-mise exec -- cargo test --package a2ui-core --test upstream --locked
+mise exec -- cargo test --package a2ui-rs --test upstream --locked
 ```
 
 Use `mise exec -- COMMAND` to run a pinned tool without shell activation.
@@ -50,9 +49,7 @@ mise exec -- kingfisher scan . --staged --quiet --redact --no-validate --no-upda
 PR and main-branch CI run the quality task on Linux without executing tests or initializing the submodule.
 [Package validation](.github/workflows/package-validation.yml) runs integration and documentation tests on Linux, macOS, and Windows when a `v*` tag is pushed.
 A publishing workflow can call package validation and require its success before publication.
-There is no package publisher yet. The crate remains marked `publish = false`.
-CI does not run Hawk because this workspace contains only an external library.
-Do not add an artificial binary to make its closed-world analysis applicable.
+Use Hawk only for an internal product with a suitable analysis target.
 
 ## Tool updates
 
@@ -82,8 +79,8 @@ Include rejection cases and incremental message sequences when relevant.
 Use fictional data and public protocol identifiers.
 Tests must exercise production APIs instead of a test-only protocol implementation.
 
-The bootstrap version tests inspect message versions only.
-They do not validate the complete local or upstream message payloads.
+The version tests check protocol selection. Protocol tests check typed envelopes and upstream renderer fixtures.
+The common-type runner executes supported upstream cases and reports all remaining cases with reasons.
 
 Upstream references live in a Git submodule. Do not edit its files.
 Update the pin only through the process in `docs/conformance.md`.
@@ -91,7 +88,6 @@ Do not replace negative expectations with successful examples.
 
 ## Dependencies
 
-The public Core SDK depends on Serde and `thiserror` 2.
 Keep YAML parsing in dev-dependencies for integration tests.
 Prefer maintained stable releases. Disable unnecessary default features.
 Commit `Cargo.lock` and review license, source, advisory, and duplicate-version checks.
@@ -105,5 +101,4 @@ mise exec -- cargo update --package PACKAGE --precise VERSION
 
 Use Conventional Commits for commit and pull request titles.
 State the changed behavior, its reason, and the checks performed.
-Keep publication disabled during bootstrap.
 Do not publish packages, tags, or releases without a separate request.

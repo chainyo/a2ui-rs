@@ -1,31 +1,36 @@
 # Conformance
 
-## Current coverage
+## Test procedure
 
-**No upstream behavioral conformance case runs against the Core SDK yet.**
-The bootstrap tests only the public protocol version type.
+Initialize the upstream submodule before you run the tests.
+The Core harness uses the public Rust types for supported upstream cases.
+It compares the JSON value before and after serialization for each valid input.
+An invalid input must fail deserialization.
 
-The `upstream` integration test checks the Git submodule and inventories its Core suites:
+Run the Core harness with:
 
 ```sh
-cargo test --package a2ui-core --test upstream --locked -- --nocapture
+mise exec -- cargo test --package a2ui-rs --test upstream --locked -- --nocapture
 ```
 
-The test verifies that the checkout matches the recorded Git pin and has no local changes.
-It also checks required reference paths and lists every case in `conformance/core/*.yaml`.
-Cases are pending unless their suite or declared protocol version identifies legacy behavior outside scope.
-The inventory does not establish that the SDK implements those cases.
+The harness verifies the Git pin, the clean checkout, and the required reference paths.
+It reads each suite in `conformance/core/*.yaml`.
+Read `target/conformance/protocol.jsonl` for the results.
+The report uses the upstream executed-case manifest format.
 
-The audit uses a worker with a 16 MiB stack for deeply nested upstream fixtures.
-The metadata parser permits nesting up to 256 levels to read legacy rejection fixtures.
-These limits permit the same inventory check on Windows, Linux, and macOS.
-Shared suites can contain legacy steps even when a case has no protocol version.
-A future runner must classify those steps explicitly before executing the case.
+Run the protocol tests for the upstream renderer examples and JSON fixtures:
+
+```sh
+mise exec -- cargo test --package a2ui-rs --test protocol --locked
+```
+
+The protocol tests use separate fixtures. The Core report contains only the Core YAML cases.
+See [Protocol types](protocol.md) for the validation boundaries.
 
 ## Upstream reference
 
 `fixtures/upstream/` is a Git submodule of [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui).
-The parent repository records its exact commit. There is no separate revision or checksum manifest.
+The parent repository records the exact commit.
 
 Initialize the recorded checkout before running tests:
 
@@ -41,10 +46,9 @@ git ls-tree HEAD fixtures/upstream
 
 The checkout contains the protocol specifications, SDK blueprints, catalogs, examples, and complete upstream conformance suites.
 The tests use v1.0 references and classify dedicated legacy suites outside scope.
-The presence of legacy files does not add legacy support to the SDK.
 Upstream files retain their own license notices. Do not edit them inside this repository.
 
-Git is required for the inventory test. The test reads local Git metadata and does not fetch from the network.
+Install Git before you run the inventory test. The test uses local Git metadata.
 A missing checkout, mismatched commit, or local modification causes the test to fail.
 Version example tests read the initialized submodule at runtime.
 
@@ -53,7 +57,7 @@ Version example tests read the initialized submodule at runtime.
 Implement each case against the same public Core SDK used by applications.
 Do not add an alternative test-only state engine.
 
-A future runner must produce an executed-case manifest with these results:
+The runner uses these results. Its JSONL status is `skipped` for pending and outside-scope cases:
 
 | Result | Required evidence |
 | --- | --- |
@@ -72,13 +76,13 @@ Inventory success must never become that gate.
 
 Dependabot checks the submodule weekly and opens a pull request for an updated pin.
 The branch setting in `.gitmodules` selects the upstream branch for update proposals.
-Normal initialization uses the recorded commit rather than the latest branch head.
+Initialization uses the commit recorded in the parent repository.
 
 For each update:
 
 1. Review changes to the v1.0 specification, SDK blueprints, and relevant suites.
 2. Initialize the proposed checkout with `git submodule update --init`.
-3. Run the integration tests and implemented behavioral tests.
+3. Run the integration tests and read the conformance report.
 4. Review added, removed, renamed, and changed cases.
 5. State any protocol or coverage change in the pull request.
 
