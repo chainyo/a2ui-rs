@@ -3,7 +3,17 @@
 ## Setup
 
 Install Rust through rustup. The exact build toolchain is in `rust-toolchain.toml`.
-Install cargo-deny `0.20.2` as described in the README. The Hawk `0.1.9` installer is optional.
+Install cargo-deny `0.20.2`:
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+```
+
+The Hawk `0.1.9` installer is optional:
+
+```sh
+./scripts/install-hawk.sh
+```
 Keep the toolchain and Hawk versions compatible when updating either.
 
 Read the [crate map](crates/README.md), [architecture](docs/architecture.md), and [conformance policy](docs/conformance.md) before structural changes.
