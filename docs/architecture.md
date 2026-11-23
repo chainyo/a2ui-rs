@@ -47,11 +47,12 @@ Its YAML parser is a dev-dependency. The SDK runtime does not depend on Git or t
 
 Hawk assumes that product callers live inside the workspace.
 This workspace contains only a public library, so there is no suitable Hawk target.
-Keep the pinned installer available for future internal products.
+Mise provides the pinned Hawk release on Linux and macOS for future internal products.
 Do not add an artificial binary or restrict the public SDK to satisfy Hawk.
 
 ## Repository precedent
 
 The workspace follows [rudolint](https://github.com/kubeply/rudolint) at revision `bb153e24b9b0398f7bddf0631e7b2641444c3e46`.
 It uses `crates/`, `.cargo/`, `docs/`, realistic fixtures, a pinned toolchain, Clippy, cargo-deny, and Hawk.
+Mise installs pinned repository tools for local development and CI.
 The SDK adapts the application visibility policy to an external library boundary.

@@ -27,38 +27,14 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+      - name: Install locked tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
-          toolchain: 1.97.1
-          components: clippy,rustfmt
-      - name: Lint workflows
-        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
-        with:
-          version: 1.7.12
-      - name: Lint shell scripts
-        run: |
-          bash -n scripts/install-hawk.sh
-          shellcheck scripts/install-hawk.sh
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Check targets
-        run: cargo check-all
-      - name: Clippy
-        run: cargo clippy-all
-      - name: Test
-        run: cargo test-all
-      - name: Test documentation
-        run: cargo test --workspace --doc --locked
-      - name: Check documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --locked
-      - name: Dependency policy
-        uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2
-        with:
-          command: check
-          arguments: --locked
-          rust-version: 1.97.1
+          version: 2026.11.6
+          install_args: --locked
+          cache_key_prefix: mise-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Check workspace
+        run: mise run check
 
   test:
     strategy:
@@ -72,8 +48,11 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+      - name: Install locked tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
-          toolchain: 1.97.1
-      - run: cargo test-all
-      - run: cargo test --workspace --doc --locked
+          version: 2026.11.6
+          install_args: --locked
+          cache_key_prefix: mise-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Test workspace
+        run: mise run test

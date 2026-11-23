@@ -13,13 +13,13 @@ The runtime and upstream behavioral conformance tests are pending. No crates are
 
 ## Development
 
-Install [rustup](https://rustup.rs/). The toolchain is pinned in `rust-toolchain.toml`.
+Install [mise](https://mise.jdx.dev/). Tool versions are pinned in the repository.
 
 ```sh
+mise trust
+mise install --locked
 git submodule update --init
-cargo fmt --all -- --check
-cargo clippy-all
-cargo test-all
+mise run check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and all validation commands.

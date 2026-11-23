@@ -2,53 +2,63 @@
 
 ## Setup
 
-Install Git. Install Rust through rustup. The exact Rust toolchain is in `rust-toolchain.toml`.
-Initialize the pinned upstream references:
+Install Git and [mise](https://mise.jdx.dev/).
+Use mise `2026.11.6` or later. CI uses `2026.11.6`.
 
 ```sh
+mise trust
+mise install --locked
 git submodule update --init
 ```
 
-For a new checkout, `git clone --recurse-submodules` initializes them during the clone.
-Install cargo-deny `0.20.2`:
+For a new checkout, `git clone --recurse-submodules` initializes the upstream references during the clone.
 
-```sh
-cargo install cargo-deny --version 0.20.2 --locked
-```
-
-The Hawk `0.1.9` installer is optional:
-
-```sh
-./scripts/install-hawk.sh
-```
-
-Keep the toolchain and Hawk versions compatible when updating either.
+`mise.toml` pins cargo-deny, actionlint, ShellCheck, Kingfisher, and Hawk.
+`mise.lock` records their download URLs and checksums for Linux, macOS, and Windows.
+Mise reads the Rust version and components directly from `rust-toolchain.toml`.
+There is no second Rust version declaration in `mise.toml`.
+Hawk is available on Linux and macOS. Keep its version compatible with the Rust toolchain.
+ShellCheck checks workflow shell commands through actionlint.
 
 Read the [crate map](crates/README.md), [architecture](docs/architecture.md), and [conformance policy](docs/conformance.md) before structural changes.
 Use the [writing guide](docs/writing.md) for documentation and comments.
 
 ## Validation
 
-Run these checks before a pull request:
+Run the same quality task as CI:
 
 ```sh
-cargo fmt --all -- --check
-cargo check-all
-cargo clippy-all
-cargo test-all
-cargo test --workspace --doc --locked
-RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
-cargo deny --locked check
-bash -n scripts/install-hawk.sh
-shellcheck scripts/install-hawk.sh
-actionlint
+mise run check
 ```
 
-CI initializes the pinned submodule and runs the Rust tests on Linux, macOS, and Windows.
-CI runs the full quality checks on Linux.
-Hawk remains available through the pinned installer.
+The task runs formatting, all-target checks, Clippy, integration tests, documentation tests, Rustdoc, actionlint, and cargo-deny.
+For focused test runs, use:
+
+```sh
+mise run test
+mise exec -- cargo test --package a2ui-core --test upstream --locked
+```
+
+Use `mise exec -- COMMAND` to run a pinned tool without shell activation.
+Mise also provides pinned Kingfisher for the required pre-commit scan:
+
+```sh
+mise exec -- kingfisher scan . --staged --quiet --redact --no-validate --no-update-check
+```
+
+CI initializes the submodule and runs the Rust tests on Linux, macOS, and Windows.
+CI runs the full quality task on Linux.
 CI does not run Hawk because this workspace contains only an external library.
 Do not add an artificial binary to make its closed-world analysis applicable.
+
+## Tool updates
+
+Update exact tool pins in `mise.toml`, then refresh the lockfile with `mise lock`.
+Update Rust in `rust-toolchain.toml`. Review Hawk compatibility when Rust or Hawk changes.
+Keep supported platforms in the lockfile and review checksum changes.
+Run `mise install --locked` and `mise run check` before submitting an update.
+Dependabot maintains Cargo dependencies, CI actions, and the upstream submodule.
+Mise tool pins require a reviewed manual update.
 
 ## Fixtures
 
@@ -73,7 +83,7 @@ Commit `Cargo.lock` and review license, source, advisory, and duplicate-version 
 Use a scoped update when changing a dependency:
 
 ```sh
-cargo update --package PACKAGE --precise VERSION
+mise exec -- cargo update --package PACKAGE --precise VERSION
 ```
 
 ## Pull requests and releases

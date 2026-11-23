@@ -1,0 +1,33 @@
+min_version = "2026.11.6"
+
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+lockfile_platforms = ["linux-x64", "macos-x64", "macos-arm64", "windows-x64"]
+
+[tools]
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:rhysd/actionlint" = "1.7.12"
+"aqua:koalaman/shellcheck" = "0.11.0"
+"github:mongodb/kingfisher" = "1.110.0"
+"github:astral-sh/hawk" = { version = "0.1.9", os = ["linux", "macos"], matching = "cargo-hawk" }
+
+[tasks.check]
+description = "Run workspace quality checks"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = [
+  "actionlint",
+  "cargo fmt --all -- --check",
+  "cargo check-all",
+  "cargo clippy-all",
+  "cargo test-all",
+  "cargo test --workspace --doc --locked",
+  "cargo doc --workspace --no-deps --locked",
+  "cargo deny --locked check",
+]
+
+[tasks.test]
+description = "Run integration and documentation tests"
+run = [
+  "cargo test-all",
+  "cargo test --workspace --doc --locked",
+]
