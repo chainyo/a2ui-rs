@@ -3,7 +3,7 @@
 ## Setup
 
 Install Rust through rustup. The exact build toolchain is in `rust-toolchain.toml`.
-Install cargo-deny `0.20.2` and Hawk `0.1.9` as described in the README.
+Install cargo-deny `0.20.2` as described in the README. The Hawk `0.1.9` installer is optional.
 Keep the toolchain and Hawk versions compatible when updating either.
 
 Read the [crate map](crates/README.md), [architecture](docs/architecture.md), and [conformance policy](docs/conformance.md) before structural changes.
@@ -15,14 +15,12 @@ Run these checks before a pull request:
 
 ```sh
 cargo fmt --all -- --check
-cargo xtask-check
-cargo xtask-clippy
-cargo xtask-test
+cargo check-all
+cargo clippy-all
+cargo test-all
 cargo test --workspace --doc --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --locked
-cargo xtask upstream
 cargo deny --locked check
-cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate a2ui_core -D warnings -D hawk::unnecessary_crate_visibility
 bash -n scripts/install-hawk.sh
 shellcheck scripts/install-hawk.sh
 actionlint
@@ -30,8 +28,9 @@ actionlint
 
 CI runs the Rust tests on Linux, macOS, and Windows.
 CI runs the full quality checks on Linux.
-The Core SDK is an external library boundary for Hawk.
-Do not reduce its public API because a workspace binary does not call it.
+Hawk remains available through the pinned installer.
+CI does not run Hawk because this workspace contains only an external library.
+Do not add an artificial binary to make its closed-world analysis applicable.
 
 ## Fixtures
 
@@ -50,7 +49,7 @@ Do not replace negative expectations with successful examples.
 ## Dependencies
 
 The public Core SDK depends on Serde and `thiserror` 2.
-Keep extra parsing, hashing, and audit dependencies in repository tooling.
+Keep YAML parsing and reference hashing in dev-dependencies for integration tests.
 Prefer maintained stable releases. Disable unnecessary default features.
 Commit `Cargo.lock` and review license, source, advisory, and duplicate-version checks.
 Use a scoped update when changing a dependency:

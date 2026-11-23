@@ -1,7 +1,6 @@
-//! Repository checks. This binary does not ship with the SDK.
+//! Verifies upstream references and inventories pending conformance cases.
 
 use std::collections::BTreeSet;
-use std::env;
 use std::error::Error;
 use std::fmt::Write;
 use std::fs;
@@ -11,7 +10,7 @@ use std::thread;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-type TaskError = Box<dyn Error + Send + Sync>;
+type TestError = Box<dyn Error + Send + Sync>;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,13 +34,10 @@ struct Case {
     protocol_version: Option<String>,
 }
 
-fn main() -> Result<(), TaskError> {
-    let arguments: Vec<String> = env::args().skip(1).collect();
-    if arguments != ["upstream"] {
-        return Err("usage: cargo xtask upstream".into());
-    }
+#[test]
+fn upstream_references_match_the_pinned_inventory() -> Result<(), TestError> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    // Deep upstream fixtures exceed the default Windows main-thread stack.
+    // Deep upstream fixtures exceed the default Windows thread stack.
     let worker = thread::Builder::new()
         .name("upstream-audit".to_owned())
         .stack_size(16 * 1024 * 1024)
@@ -51,7 +47,7 @@ fn main() -> Result<(), TaskError> {
         .map_err(|_| "upstream audit worker panicked")?
 }
 
-fn audit(root: &Path) -> Result<(), TaskError> {
+fn audit(root: &Path) -> Result<(), TestError> {
     let upstream = root.join("fixtures/upstream");
     let manifest: Manifest = serde_json::from_slice(&fs::read(upstream.join("manifest.json"))?)?;
     if manifest.repository != "https://github.com/a2ui-project/a2ui"
@@ -131,16 +127,10 @@ fn parse_cases(source: &str) -> Result<Vec<Case>, serde_saphyr::Error> {
     serde_saphyr::from_str_with_options(source, options)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use super::parse_cases;
-
-    #[test]
-    fn inventory_keeps_negative_cases_with_non_finite_inputs() -> Result<(), Box<dyn Error>> {
-        let cases = parse_cases(
-            r#"
+#[test]
+fn inventory_keeps_negative_cases_with_non_finite_inputs() -> Result<(), TestError> {
+    let cases = parse_cases(
+        r#"
 - name: rejects_non_finite_amount
   protocolVersion: "1.0"
   strictMode: true
@@ -151,10 +141,9 @@ mod tests {
   protocolVersion: "1.0"
   expectError: {category: RecursionError}
 "#,
-        )?;
-        assert_eq!(cases.len(), 2);
-        assert_eq!(cases[0].name, "rejects_non_finite_amount");
-        assert_eq!(cases[1].name, "rejects_recursive_graph");
-        Ok(())
-    }
+    )?;
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].name, "rejects_non_finite_amount");
+    assert_eq!(cases[1].name, "rejects_recursive_graph");
+    Ok(())
 }

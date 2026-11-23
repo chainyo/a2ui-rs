@@ -57,26 +57,37 @@ Use the toolchain file as the build requirement. An older MSRV is not promised.
 ```sh
 rustup show
 cargo fmt --all -- --check
-cargo xtask-check
-cargo xtask-clippy
-cargo xtask-test
+cargo check-all
+cargo clippy-all
+cargo test-all
 cargo test --workspace --doc --locked
-cargo xtask upstream
 ```
 
 Install the development checks:
 
 ```sh
 cargo install cargo-deny --version 0.20.2 --locked
-./scripts/install-hawk.sh
 cargo deny --locked check
-cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate a2ui_core -D warnings -D hawk::unnecessary_crate_visibility
 ```
 
-The installer verifies Hawk `0.1.9` against pinned archive checksums.
+The optional Hawk installer verifies version `0.1.9` against pinned archive checksums:
+
+```sh
+./scripts/install-hawk.sh
+```
+
 That Hawk release requires the pinned Rust toolchain.
-Hawk checks repository tooling. It excludes the Core SDK because its public callers live outside this workspace.
+Hawk assumes that product callers live inside the workspace.
+This workspace contains only a public library, so CI does not run Hawk.
+Add a Hawk gate when a suitable internal product requires it.
 Clippy, Rustdoc, and integration tests check the public SDK boundary.
+
+The normal test suite verifies the upstream references.
+To see the pending-case inventory, run this integration test directly:
+
+```sh
+cargo test --package a2ui-core --test upstream --locked -- --nocapture
+```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for all checks and fixture rules.
 The workspace follows the crate layout and tooling approach of [rudolint](https://github.com/kubeply/rudolint).

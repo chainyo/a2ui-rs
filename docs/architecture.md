@@ -12,8 +12,6 @@ The protocol contract starts at v1.0. Legacy adapters are outside scope.
 Future agent helpers ──> a2ui-core <── Future framework adapters
                               ↑
                        Application code
-
-xtask: independent repository tooling
 ```
 
 Core will own these responsibilities from the upstream blueprint:
@@ -44,9 +42,13 @@ GPUI is a possible adapter. It is not a Core SDK dependency.
 
 Integration tests exercise the public crate.
 Rustdoc checks public documentation. Clippy checks all targets.
-Hawk analyzes the private `xtask` product and excludes `a2ui_core` from closed-world diagnostics.
-This exclusion preserves APIs for callers outside the workspace.
-It does not establish API compatibility or protocol conformance.
+The upstream audit runs as an integration test with dev-dependencies.
+It does not add YAML parsing or hashing to the SDK runtime dependency tree.
+
+Hawk assumes that product callers live inside the workspace.
+This workspace contains only a public library, so there is no suitable Hawk target.
+Keep the pinned installer available for future internal products.
+Do not add an artificial binary or restrict the public SDK to satisfy Hawk.
 
 ## Repository precedent
 

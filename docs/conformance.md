@@ -5,12 +5,16 @@
 **No upstream behavioral conformance case runs against the Core SDK yet.**
 The bootstrap tests only the public protocol version type.
 
-`cargo xtask upstream` performs two repository checks:
+The `upstream` integration test performs two repository checks:
+
+```sh
+cargo test --package a2ui-core --test upstream --locked -- --nocapture
+```
 
 1. Verify each imported file against its recorded SHA-256 checksum.
 2. List every case in the imported Core YAML suites.
 
-The command labels cases as pending or outside scope for an explicitly declared legacy protocol.
+The test labels cases as pending or outside scope for an explicitly declared legacy protocol.
 Its success means the reference files are intact and readable.
 It does not mean the SDK implements their behavior.
 The audit uses a worker with a 16 MiB stack for deeply nested upstream fixtures.
@@ -64,7 +68,7 @@ Inventory success must never become that gate.
 4. Add required reference dependencies when the suite introduces new paths.
 5. Update the revision, file inventory, and SHA-256 checksums together.
 6. Review added, removed, renamed, and changed cases.
-7. Run `cargo xtask upstream` and the implemented behavioral tests.
+7. Run the `upstream` integration test and the implemented behavioral tests.
 8. State the coverage change in the pull request.
 
 Do not refresh upstream references as an unrelated dependency update.

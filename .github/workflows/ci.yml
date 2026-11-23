@@ -41,25 +41,17 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check targets
-        run: cargo xtask-check
+        run: cargo check-all
       - name: Clippy
-        run: cargo xtask-clippy
+        run: cargo clippy-all
       - name: Test
-        run: cargo xtask-test
+        run: cargo test-all
       - name: Test documentation
         run: cargo test --workspace --doc --locked
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
-      - name: Verify upstream references and report pending cases
-        run: |
-          cargo xtask upstream > target/upstream-report.txt
-          tail -n 1 target/upstream-report.txt
-      - name: Install Hawk
-        run: ./scripts/install-hawk.sh
-      - name: Hawk
-        run: cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate a2ui_core -D warnings -D hawk::unnecessary_crate_visibility
       - name: Dependency policy
         uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2
         with:
@@ -81,6 +73,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: 1.97.1
-      - run: cargo xtask-test
+      - run: cargo test-all
       - run: cargo test --workspace --doc --locked
-      - run: cargo xtask upstream
