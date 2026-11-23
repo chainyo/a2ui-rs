@@ -23,7 +23,7 @@ A supported case failure is recorded as failed and fails the test.
 Run the Core harness with:
 
 ```sh
-mise exec -- cargo test --package a2ui-rust-core --test upstream --locked -- --nocapture
+mise exec -- cargo test --package a2ui-rs --test upstream --locked -- --nocapture
 ```
 
 The harness verifies the Git pin, clean checkout, and required reference paths before executing cases.

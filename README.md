@@ -1,4 +1,4 @@
-# a2ui-rust
+# a2ui-rs
 
 A framework-independent Rust SDK for [A2UI](https://a2ui.org/), targeting protocol v1.0 and later.
 
@@ -8,7 +8,7 @@ A framework-independent Rust SDK for [A2UI](https://a2ui.org/), targeting protoc
 
 ## Status
 
-Early development. `a2ui-rust-core` provides typed v1.0 messages, Serde support, and initial upstream conformance tests.
+Early development. `a2ui-rs` provides typed v1.0 messages, Serde support, and initial upstream conformance tests.
 The state engine and catalog validation are pending. No crates are published.
 
 ## Development

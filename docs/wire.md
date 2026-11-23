@@ -1,6 +1,6 @@
 # Wire types
 
-The `a2ui-rust-core` package exposes its wire types under `a2ui_rust_core::wire`.
+The `a2ui-rs` package exposes its wire types under `a2ui_rs::wire`.
 The package name was available when selected. Publication is still disabled.
 
 ## Message envelopes

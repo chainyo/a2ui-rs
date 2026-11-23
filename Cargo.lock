@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "a2ui-rust-core"
+name = "a2ui-rs"
 version = "0.1.0"
 dependencies = [
  "serde",

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
-use a2ui_rust_core::wire::{Extensions, FunctionResponse};
+use a2ui_rs::wire::{Extensions, FunctionResponse};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -117,7 +117,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 )
             };
             records.push(Record {
-                harness: "a2ui-rust-core-wire",
+                harness: "a2ui-rs-wire",
                 suite: suite_name.clone(),
                 case: case.name,
                 status,

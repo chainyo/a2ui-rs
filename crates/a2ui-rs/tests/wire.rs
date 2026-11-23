@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use a2ui_rust_core::wire::{
+use a2ui_rs::wire::{
     Action, AgentToRenderer, AgentToRendererMessage, GenericError, MessageBatch,
     RendererToAgentMessage,
 };

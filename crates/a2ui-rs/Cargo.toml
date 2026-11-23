@@ -1,5 +1,5 @@
 [package]
-name = "a2ui-rust-core"
+name = "a2ui-rs"
 description = "Framework-independent protocol and state foundations for A2UI v1.0 and later"
 version.workspace = true
 edition.workspace = true

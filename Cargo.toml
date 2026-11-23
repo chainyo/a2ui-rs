@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/a2ui-rust-core"]
+members = ["crates/a2ui-rs"]
 resolver = "3"
 
 [workspace.package]
@@ -7,10 +7,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "Apache-2.0"
-repository = "https://github.com/chainyo/a2ui-rust"
+repository = "https://github.com/chainyo/a2ui-rs"
 
 [workspace.dependencies]
-a2ui-rust-core = { path = "crates/a2ui-rust-core" }
+a2ui-rs = { path = "crates/a2ui-rs" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 unicode-ident = "1.0.27"

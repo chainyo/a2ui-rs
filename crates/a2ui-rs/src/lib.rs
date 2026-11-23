@@ -4,18 +4,18 @@
 //! payload types. State processing and catalog validation are not implemented.
 //!
 //! ```
-//! use a2ui_rust_core::ProtocolVersion;
+//! use a2ui_rs::ProtocolVersion;
 //!
 //! let version: ProtocolVersion = "1.0".parse()?;
 //! assert_eq!(version, ProtocolVersion::V1_0);
 //! assert!("0.9".parse::<ProtocolVersion>().is_err());
-//! # Ok::<(), a2ui_rust_core::UnsupportedVersion>(())
+//! # Ok::<(), a2ui_rs::UnsupportedVersion>(())
 //! ```
 
 //! A typed message serializes with the required protocol tag:
 //!
 //! ```
-//! use a2ui_rust_core::wire::{AgentToRenderer, AgentToRendererMessage, DeleteSurface};
+//! use a2ui_rs::wire::{AgentToRenderer, AgentToRendererMessage, DeleteSurface};
 //!
 //! let message = AgentToRendererMessage::V1(AgentToRenderer::DeleteSurface(
 //!     DeleteSurface { surface_id: "contact".to_owned() },

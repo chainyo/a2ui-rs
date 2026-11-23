@@ -9,7 +9,7 @@ The protocol contract starts at v1.0. Legacy adapters are outside scope.
 ## Dependency direction
 
 ```text
-Future agent helpers ──> a2ui-rust-core <── Future framework adapters
+Future agent helpers ──> a2ui-rs <── Future framework adapters
                               ↑
                        Application code
 ```
