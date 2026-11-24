@@ -182,6 +182,12 @@ fn create_session(
     let (mut catalog, common) = basic_catalog(upstream, catalog_id)?;
     let mut functions = LocalFunctions::default();
     for (name, function) in scenario["localFunctions"].as_object().into_iter().flatten() {
+        if catalog["functions"].get(name).is_none() {
+            catalog["$defs"]["anyFunction"]["oneOf"]
+                .as_array_mut()
+                .ok_or("missing Basic Catalog function union")?
+                .push(json!({"$ref": format!("#/functions/{name}")}));
+        }
         catalog["functions"][name] = json!({
             "returnType": function["returnType"],
             "properties": {"args": {"type": "object"}}

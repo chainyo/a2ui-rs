@@ -14,6 +14,10 @@ use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
 
+#[path = "catalog.rs"]
+mod catalog_cases;
+
+const CATALOG_SUITE: &str = "core/catalog.yaml";
 const COMPOSITION_SUITE: &str = "core/composition_constraints.yaml";
 const RESERVED_KEYS_SUITE: &str = "core/reserved_keys.yaml";
 
@@ -81,31 +85,13 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
     if supports_transaction(suite, case) {
         return true;
     }
-    if suite == "core/catalog.yaml" && case.action == "from_json" {
+    if suite == CATALOG_SUITE {
         return matches!(
-            case.name.as_str(),
-            "test_v10_catalog_from_json_uax31_validation"
-                | "test_v10_catalog_from_json_v1_0_attributes"
-                | "test_v10_catalog_from_json_user_activation_agent_only_error"
-                | "test_v10_catalog_from_json_user_activation_renderer_or_agent_error"
-                | "test_v10_catalog_from_json_user_activation_renderer_only"
-                | "test_v10_catalog_from_json_user_activation_error_in_function_left_out_of_union"
-                | "test_v10_catalog_from_json_rejects_at_prefixed_function_name"
-                | "test_v10_catalog_from_json_invalid_uax31_identifier_error"
-                | "test_v10_catalog_from_json_rejects_ref_to_another_catalog"
-                | "test_v10_catalog_from_json_rejects_absolute_uri_ref"
-                | "test_v10_catalog_from_json_rejects_external_ref_in_function_args"
-                | "test_v10_catalog_from_json_accepts_local_and_common_types_refs"
-                | "test_v10_uax31_invalid_component_name"
-                | "test_v10_uax31_invalid_property_name"
-                | "test_v10_uax31_invalid_function_name"
-                | "test_v10_uax31_invalid_argument_name"
-                | "test_v10_uax31_valid_non_ascii_identifier"
-                | "test_v10_uax31_invalid_en_dash_component_name"
-                | "test_v10_uax31_invalid_em_dash_property_name"
-                | "test_v10_uax31_invalid_armenian_hyphen_function_name"
-                | "test_v10_catalog_from_json_component_metadata"
-        );
+            case.action.as_str(),
+            "from_json" | "to_json" | "round_trip" | "derive" | "validation_schema"
+        ) && (case.protocol_version.as_deref() == Some("1.0")
+            || case.name.starts_with("test_v10_")
+            || case.name == "test_catalog_from_json_missing_catalog_id_error");
     }
     suite == "core/validator_v1_0.yaml"
         && case.action == "validate"
@@ -146,8 +132,8 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
 
 pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
-    if case.action == "from_json" {
-        return execute_catalog(upstream, case, &common);
+    if suite == CATALOG_SUITE {
+        return catalog_cases::execute(upstream, case, &common);
     }
     if suite == RESERVED_KEYS_SUITE {
         return execute_reserved_keys(upstream, case, &common);
@@ -755,72 +741,6 @@ fn assert_transaction_error(
         .as_ref()
         .and_then(|actual| actual["error"]["code"].as_str());
     assert_rejection(&Value::Object(core), category, renderer_code, &message)
-}
-
-fn execute_catalog(upstream: &Path, case: &Case, common: &Value) -> Result<(), TestError> {
-    let document = match (&case.catalog, &case.catalog_path) {
-        (Some(document), None) => catalog_document(case, document)?,
-        (None, Some(path)) => read_json(upstream, path)?,
-        _ => return Err("expected one catalog input".into()),
-    };
-    match (Catalog::from_json(document, common), &case.expect_error) {
-        (Ok(catalog), None) => {
-            if let Some(expected) = &case.expect {
-                assert_catalog(catalog.as_json(), expected)?;
-            }
-            Ok(())
-        }
-        (Err(error), Some(expected)) => {
-            assert_rejection(expected, "CatalogError", None, &error.to_string())
-        }
-        (Ok(_), Some(_)) => Err("expected catalog error".into()),
-        (Err(error), None) => Err(error.into()),
-    }
-}
-
-fn assert_catalog(document: &Value, expected: &Value) -> Result<(), TestError> {
-    for (key, value) in expected.as_object().ok_or("expected catalog fields")? {
-        let actual = match key.as_str() {
-            "componentMetadata" => {
-                let fields = value
-                    .as_object()
-                    .ok_or("expected component metadata fields")?;
-                Value::Object(
-                    fields
-                        .keys()
-                        .map(|name| {
-                            (
-                                name.clone(),
-                                document["components"][name]["metadata"].clone(),
-                            )
-                        })
-                        .collect(),
-                )
-            }
-            "components" | "functions" if value.is_array() => {
-                let actual = document[key].as_object().ok_or("missing catalog entries")?;
-                let names = actual
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<std::collections::BTreeSet<_>>();
-                let expected_names = value
-                    .as_array()
-                    .ok_or("expected names")?
-                    .iter()
-                    .map(|name| name.as_str().ok_or("expected catalog entry name"))
-                    .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-                if names != expected_names {
-                    return Err(format!("expected {key} {expected_names:?}, got {names:?}").into());
-                }
-                continue;
-            }
-            _ => document[key].clone(),
-        };
-        if actual != *value {
-            return Err(format!("expected {key} {value}, got {actual}").into());
-        }
-    }
-    Ok(())
 }
 
 fn catalog_document(case: &Case, document: &Value) -> Result<Value, TestError> {

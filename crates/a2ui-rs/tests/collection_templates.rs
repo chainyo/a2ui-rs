@@ -152,6 +152,10 @@ fn session() -> Result<(RoutingSession<'static>, Instant), Box<dyn Error>> {
         upstream.join("specification/v1_0/json/common_types.json"),
     )?)?;
     catalog["functions"]["dropLastShipment"] = json!({"returnType": "boolean"});
+    catalog["$defs"]["anyFunction"]["oneOf"]
+        .as_array_mut()
+        .ok_or("missing Basic Catalog function union")?
+        .push(json!({"$ref": "#/functions/dropLastShipment"}));
     let catalog = Catalog::from_json(catalog, &common)?;
     let mut functions = LocalFunctions::default();
     functions.insert_action(catalog.id(), "dropLastShipment", |_, context| {

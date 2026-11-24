@@ -198,6 +198,14 @@ fn execute_inbound(
         if let Some(parameters) = meta.get("parameters") {
             schema["properties"]["args"] = parameters.clone();
         }
+        if catalog["functions"].get(name).is_none()
+            && let Some(branches) = catalog
+                .get_mut("$defs")
+                .and_then(|defs| defs.pointer_mut("/anyFunction/oneOf"))
+                .and_then(Value::as_array_mut)
+        {
+            branches.push(json!({"$ref": format!("#/functions/{name}")}));
+        }
         catalog["functions"][name] = schema;
         match name.as_str() {
             "playMedia" => functions.insert(catalog_id, name, |args| {

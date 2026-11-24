@@ -11,6 +11,10 @@ use thiserror::Error;
 
 use crate::protocol::{Component, FunctionCall, JsonObject, Metadata};
 
+mod document;
+
+pub use document::{CatalogDerivation, CatalogEntry};
+
 const CATALOG: &str = "https://a2ui.org/specification/v1_0/catalog.json";
 const COMMON: &str = "https://a2ui.org/specification/v1_0/common_types.json";
 
@@ -106,7 +110,7 @@ impl Catalog {
     ///
     /// # Errors
     /// Returns an error if the document has an invalid ID, version, name, or schema.
-    pub fn from_json(document: Value, common_types: &Value) -> Result<Self, CatalogError> {
+    pub fn from_json(mut document: Value, common_types: &Value) -> Result<Self, CatalogError> {
         let id = document["catalogId"]
             .as_str()
             .filter(|id| !id.is_empty())
@@ -119,22 +123,21 @@ impl Catalog {
             return Err(invalid("Common types must contain a $defs object"));
         }
 
+        validate_entries(entries(&document, "components")?, "component")?;
+        validate_entries(entries(&document, "functions")?, "function")?;
+        for kind in ["$defs", "components", "functions"] {
+            check_schema_refs(entries(&document, kind)?)?;
+        }
+        document::filter_union(&mut document, "components", "anyComponent")?;
+        document::filter_union(&mut document, "functions", "anyFunction")?;
+        let components = entries(&document, "components")?.keys().cloned().collect();
+        let functions = entries(&document, "functions")?.keys().cloned().collect();
         let mut local = document.clone();
-        let local_object = local
-            .as_object_mut()
-            .ok_or_else(|| invalid("Expected a catalog object"))?;
-        local_object.remove("$id");
-        let component_entries = entries(&local, "components")?;
-        let function_entries = entries(&local, "functions")?;
-        validate_entries(component_entries, "component")?;
-        validate_entries(function_entries, "function")?;
-        let components = component_entries.keys().cloned().collect::<Vec<_>>();
-        let functions = function_entries.keys().cloned().collect::<Vec<_>>();
-        check_schema_refs(entries(&local, "$defs")?)?;
-        check_schema_refs(component_entries)?;
-        check_schema_refs(function_entries)?;
-
-        let mut common_types = common_types.clone();
+        if let Some(object) = local.as_object_mut() {
+            object.remove("$id");
+        }
+        let published_common_types = common_types.clone();
+        let mut common_types = published_common_types.clone();
         let common_defs = common_types["$defs"]
             .as_object_mut()
             .ok_or_else(|| invalid("Common types must contain a $defs object"))?;
@@ -181,7 +184,7 @@ impl Catalog {
         Ok(Self {
             id,
             document,
-            common_types,
+            common_types: published_common_types,
             components,
             functions,
         })
@@ -194,6 +197,8 @@ impl Catalog {
     }
 
     /// Returns the catalog JSON with its original references.
+    ///
+    /// Explicit unions control which entries the catalog exports.
     #[must_use]
     pub fn as_json(&self) -> &Value {
         &self.document
@@ -204,7 +209,28 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the component type is unknown or a property is invalid.
     pub fn validate_component(&self, component: &Component) -> Result<(), CatalogError> {
-        self.validate_component_at(component, None)
+        self.validate_component_at(component, None)?;
+        let mut values: Vec<_> = component.properties.values().collect();
+        while let Some(value) = values.pop() {
+            match value {
+                Value::Object(object) if object.contains_key("@call") => {
+                    let call = serde_json::from_value::<FunctionCall>(value.clone())
+                        .map_err(|source| invalid(source.to_string()))?;
+                    crate::resolution::validate_call_shape(&call)
+                        .map_err(|error| invalid(error.to_string()))?;
+                    if call.name != "@index"
+                        && call.catalog_id.as_deref().is_none_or(|id| id == self.id)
+                    {
+                        self.validate_function(&call)?;
+                    }
+                    values.extend(object.get("args"));
+                }
+                Value::Object(object) => values.extend(object.values()),
+                Value::Array(array) => values.extend(array),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn validate_component_at(
@@ -678,6 +704,15 @@ pub enum CatalogError {
     /// The catalog document or schema is invalid.
     #[error("{0}")]
     InvalidCatalog(String),
+    /// The metadata in a component definition is invalid.
+    #[error("Invalid metadata for component '{name}': {source}")]
+    InvalidComponentMetadata {
+        /// The component name.
+        name: String,
+        /// The metadata decode error.
+        #[source]
+        source: serde_json::Error,
+    },
     /// The catalog has no entry with this name.
     #[error("Catalog does not define '{0}'")]
     UnknownEntry(String),
@@ -737,8 +772,12 @@ fn validate_entries(entries: &Map<String, Value>, kind: &str) -> Result<(), Cata
         if kind == "component"
             && let Some(metadata) = schema.get("metadata")
         {
-            serde_json::from_value::<Metadata>(metadata.clone())
-                .map_err(|error| invalid(error.to_string()))?;
+            serde_json::from_value::<Metadata>(metadata.clone()).map_err(|source| {
+                CatalogError::InvalidComponentMetadata {
+                    name: name.clone(),
+                    source,
+                }
+            })?;
         }
         for key in ["allowedParents", "allowedChildren"] {
             if let Some(value) = schema.get(key)

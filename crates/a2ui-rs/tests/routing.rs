@@ -246,6 +246,10 @@ fn effects_session() -> Result<(RoutingSession<'static>, Instant, Value), Box<dy
     catalog["catalogId"] = json!(catalog_id);
     let mut functions = LocalFunctions::default();
     for name in ["recordAttempt", "saveDraft", "failSave"] {
+        catalog["$defs"]["anyFunction"]["oneOf"]
+            .as_array_mut()
+            .ok_or("missing Basic Catalog function union")?
+            .push(json!({"$ref": format!("#/functions/{name}")}));
         catalog["functions"][name] = json!({
             "returnType": "boolean", "properties": {"args": {"type": "object"}}
         });
