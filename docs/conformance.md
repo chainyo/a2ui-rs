@@ -106,7 +106,8 @@ The processor cases check permissive streaming and validation rules for one mess
 The harness compares the surface before and after a rejected update.
 The duplicate-ID and cycle fixtures check rejection, rollback, and the renderer error envelope.
 The harness checks the error code, message, and surface ID.
-The invalid pointer case also checks the field path in the error envelope.
+The invalid pointer and component validation cases also check field paths.
+The composition cases check paths for disallowed parents and child references.
 The catalog lookup cases check unknown catalog IDs and absent surface defaults.
 
 ## Event actions

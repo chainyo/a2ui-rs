@@ -2,13 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use jsonschema::paths::Location;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::catalog::{Catalog, CatalogError};
 use crate::data_model::DataError;
-use crate::expression::{Expression, parse_template};
+use crate::expression::{Expression, is_identifier, parse_template};
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
     GenericError, RendererError, RendererToAgent, RendererToAgentMessage, UpdateDataModel,
@@ -207,15 +208,34 @@ impl MessageProcessor {
         config: ValidationConfig,
     ) -> Result<(), ValidationError> {
         let mut pending = BTreeMap::new();
-        for component in batch.as_slice() {
-            if pending.insert(component.id.as_str(), component).is_some() {
+        for (index, component) in batch.as_slice().iter().enumerate() {
+            if pending
+                .insert(component.id.as_str(), (index, component))
+                .is_some()
+            {
                 return Err(SurfaceError::DuplicateComponent(component.id.clone()).into());
             }
         }
 
-        for component in batch.as_slice() {
+        for (index, component) in batch.as_slice().iter().enumerate() {
+            let base = component_path(index);
+            if !is_identifier(&component.id) {
+                return Err(ValidationError::InvalidComponentId {
+                    id: component.id.clone(),
+                    path: format!("{base}/id"),
+                });
+            }
             let catalog = self.catalog(component.catalog_id.as_deref().or(default_catalog))?;
-            check_entry(catalog.validate_component(component), config)?;
+            let result = catalog.validate_component_at(component, Some(&base));
+            match result {
+                Err(CatalogError::UnknownEntry(name)) if !config.allow_unknown_elements => {
+                    return Err(ValidationError::UnknownComponent {
+                        name,
+                        path: format!("{base}/component"),
+                    });
+                }
+                result => check_entry(result, config)?,
+            }
             for property in component.properties.values() {
                 self.validate_calls(property, default_catalog, None, config, 0)?;
             }
@@ -230,7 +250,7 @@ impl MessageProcessor {
         for component in current
             .iter()
             .filter(|item| !pending.contains_key(item.id.as_str()))
-            .chain(pending.values().copied())
+            .chain(pending.values().map(|&(_, component)| component))
         {
             let catalog = self.catalog(component.catalog_id.as_deref().or(default_catalog))?;
             let schema = catalog.component_schema(&component.component);
@@ -246,6 +266,7 @@ impl MessageProcessor {
                     kind: &component.component,
                     schema,
                     children,
+                    index: pending.get(component.id.as_str()).map(|(index, _)| *index),
                 },
             );
         }
@@ -340,7 +361,19 @@ fn check_entry(
 struct Node<'a> {
     kind: &'a str,
     schema: &'a Value,
-    children: BTreeMap<String, String>,
+    children: BTreeMap<String, (String, Location)>,
+    index: Option<usize>,
+}
+
+fn component_path(index: usize) -> String {
+    format!("/components/{index}")
+}
+
+impl Node<'_> {
+    fn path(&self, field: &str) -> Option<String> {
+        self.index
+            .map(|index| format!("/components/{index}{field}"))
+    }
 }
 
 fn validate_graph(
@@ -348,23 +381,29 @@ fn validate_graph(
     config: ValidationConfig,
 ) -> Result<(), ValidationError> {
     if let Some(root) = graph.get("root") {
-        validate_parent("root", root, "Surface", "Surface")?;
+        validate_parent("root", root, "Surface", "Surface", || root.path(""))?;
     } else if !config.allow_missing_root {
         return Err(ValidationError::MissingRoot);
     }
 
     for (&id, node) in graph {
-        for (child, field) in &node.children {
+        for (child, (field, pointer)) in &node.children {
             if id == child {
                 return Err(ValidationError::SelfReference(id.to_owned()));
             }
             if let Some(child_node) = graph.get(child.as_str()) {
-                validate_parent(child, child_node, id, node.kind)?;
+                validate_parent(child, child_node, id, node.kind, || {
+                    child_node.path("").or_else(|| node.path(pointer.as_str()))
+                })?;
                 if !allows(&node.schema["allowedChildren"], child_node.kind) {
                     let allowed = names(&node.schema["allowedChildren"]);
                     return Err(ValidationError::UnallowedChild {
                         parent: id.to_owned(),
                         child: child.clone(),
+                        path: node
+                            .path(pointer.as_str())
+                            .or_else(|| child_node.path(""))
+                            .unwrap_or_else(|| "/components".to_owned()),
                         message: format!(
                             "Container '{id}' ({}) cannot contain child '{child}' ({}). Allowed children: {allowed}.",
                             node.kind, child_node.kind
@@ -423,6 +462,7 @@ fn validate_parent(
     node: &Node<'_>,
     parent: &str,
     kind: &str,
+    path: impl FnOnce() -> Option<String>,
 ) -> Result<(), ValidationError> {
     if allows(&node.schema["allowedParents"], kind) {
         Ok(())
@@ -431,6 +471,7 @@ fn validate_parent(
         Err(ValidationError::UnallowedParent {
             child: id.to_owned(),
             parent: parent.to_owned(),
+            path: path().unwrap_or_else(|| "/components".to_owned()),
             message: format!(
                 "Component '{id}' ({}) cannot be placed under parent '{parent}' ({kind}). Allowed parents: {allowed}.",
                 node.kind
@@ -492,6 +533,22 @@ pub enum ValidationError {
     /// The catalog ID is unknown.
     #[error("Catalog not found: {0}")]
     UnknownCatalog(String),
+    /// A component ID violates the protocol identifier rules.
+    #[error("Invalid component ID '{id}'")]
+    InvalidComponentId {
+        /// The invalid component ID.
+        id: String,
+        /// The field in the incoming component batch.
+        path: String,
+    },
+    /// The catalog does not define the component type.
+    #[error("Catalog does not define component '{name}'")]
+    UnknownComponent {
+        /// The component type.
+        name: String,
+        /// The field in the incoming component batch.
+        path: String,
+    },
     /// The graph has no root.
     #[error("Missing root component")]
     MissingRoot,
@@ -521,6 +578,8 @@ pub enum ValidationError {
     UnallowedParent {
         /// The parent ID.
         parent: String,
+        /// The field in the incoming component batch.
+        path: String,
         /// The child ID.
         child: String,
         /// The parent type and the permitted types.
@@ -533,6 +592,8 @@ pub enum ValidationError {
         parent: String,
         /// The child ID.
         child: String,
+        /// The field in the incoming component batch.
+        path: String,
         /// The child type and the permitted types.
         message: String,
     },
@@ -560,16 +621,42 @@ impl ValidationError {
     /// Returns `None` for other validation failures.
     #[must_use]
     pub fn renderer_error(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
-        let error = if let Self::Surface(SurfaceError::Data {
-            source: source @ DataError::InvalidPointer(_),
-            ..
-        }) = self
-        {
+        let field = match self {
+            Self::InvalidComponentId { path, .. }
+            | Self::UnknownComponent { path, .. }
+            | Self::Catalog(CatalogError::InvalidPayload {
+                path: Some(path), ..
+            }) => Some((
+                ValidationCode::ValidationFailed,
+                path.as_str(),
+                self.to_string(),
+            )),
+            Self::UnallowedParent { path, .. } => Some((
+                ValidationCode::UnallowedParent,
+                path.as_str(),
+                self.to_string(),
+            )),
+            Self::UnallowedChild { path, .. } => Some((
+                ValidationCode::UnallowedChild,
+                path.as_str(),
+                self.to_string(),
+            )),
+            Self::Surface(SurfaceError::Data {
+                source: source @ DataError::InvalidPointer(_),
+                ..
+            }) => Some((
+                ValidationCode::ValidationFailed,
+                "/path",
+                format!("Invalid updateDataModel path. {source}"),
+            )),
+            _ => None,
+        };
+        let error = if let Some((code, path, message)) = field {
             RendererError::Validation(ProtocolValidationError {
-                code: ValidationCode::ValidationFailed,
-                message: format!("Invalid updateDataModel path. {source}"),
+                code,
+                message,
                 surface_id: surface_id.to_owned(),
-                path: "/path".to_owned(),
+                path: path.to_owned(),
             })
         } else {
             let code = match self {

@@ -1,5 +1,7 @@
 //! Offline A2UI v1.0 catalog validation.
 
+use jsonschema::error::ValidationErrorKind;
+use jsonschema::paths::Location;
 use jsonschema::{Draft, Registry, Validator};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde_json::{Map, Value, json};
@@ -15,6 +17,7 @@ const COMMON: &str = "https://a2ui.org/specification/v1_0/common_types.json";
 pub(crate) struct ChildReference<'a> {
     pub(crate) id: &'a str,
     pub(crate) field: String,
+    pointer: Location,
     pub(crate) collection: Option<&'a str>,
 }
 
@@ -31,6 +34,8 @@ pub(crate) struct PayloadShape<'a> {
     pub(crate) children: Vec<ChildReference<'a>>,
     pub(crate) properties: BTreeMap<*const Value, PropertyKind>,
 }
+
+type PayloadCandidate<'a> = (&'a Value, &'a Value, bool, String, Location);
 
 /// An immutable catalog with compiled component and function schemas.
 pub struct Catalog {
@@ -124,16 +129,44 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the component type is unknown or a property is invalid.
     pub fn validate_component(&self, component: &Component) -> Result<(), CatalogError> {
-        if component.properties.contains_key("checks")
-            && self.checks_key(component)? == Some("checks")
-        {
+        self.validate_component_at(component, None)
+    }
+
+    pub(crate) fn validate_component_at(
+        &self,
+        component: &Component,
+        base: Option<&str>,
+    ) -> Result<(), CatalogError> {
+        let checks = self.checks_key(component).map_err(|mut error| {
+            if let CatalogError::InvalidPayload { path, .. } = &mut error {
+                *path = base.map(|base| format!("{base}/@checks"));
+            }
+            error
+        })?;
+        if component.properties.contains_key("checks") && checks == Some("checks") {
             let mut normalized = component.clone();
             if let Some(checks) = normalized.properties.remove("checks") {
                 normalized.properties.insert("@checks".to_owned(), checks);
             }
-            return Self::validate_entry(&self.components, &component.component, &normalized);
+            return Self::validate_entry(&self.components, &component.component, &normalized, base)
+                .map_err(|mut error| {
+                    if let (
+                        Some(base),
+                        CatalogError::InvalidPayload {
+                            path: Some(path), ..
+                        },
+                    ) = (base, &mut error)
+                        && let Some(suffix) = path
+                            .strip_prefix(base)
+                            .and_then(|path| path.strip_prefix("/@checks"))
+                        && (suffix.is_empty() || suffix.starts_with('/'))
+                    {
+                        *path = format!("{base}/checks{suffix}");
+                    }
+                    error
+                });
         }
-        Self::validate_entry(&self.components, &component.component, component)
+        Self::validate_entry(&self.components, &component.component, component, base)
     }
 
     pub(crate) fn component_checks<'a>(
@@ -160,6 +193,7 @@ impl Catalog {
             return Err(CatalogError::InvalidPayload {
                 name: component.component.clone(),
                 message: "Component provides both '@checks' and its 'checks' alias".to_owned(),
+                path: None,
             });
         }
         Ok(if canonical {
@@ -204,25 +238,39 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the function name is unknown or an argument is invalid.
     pub fn validate_function(&self, call: &FunctionCall) -> Result<(), CatalogError> {
-        Self::validate_entry(&self.functions, &call.name, call)
+        Self::validate_entry(&self.functions, &call.name, call, None)
     }
 
     fn validate_entry(
         entries: &BTreeMap<String, Validator>,
         name: &str,
         instance: &impl serde::Serialize,
+        base: Option<&str>,
     ) -> Result<(), CatalogError> {
         let validator = entries
             .get(name)
             .ok_or_else(|| CatalogError::UnknownEntry(name.to_owned()))?;
         let instance =
             serde_json::to_value(instance).map_err(|error| invalid(error.to_string()))?;
-        validator
-            .validate(&instance)
-            .map_err(|error| CatalogError::InvalidPayload {
+        validator.validate(&instance).map_err(|error| {
+            let location = match error.kind() {
+                ValidationErrorKind::AdditionalProperties { unexpected }
+                | ValidationErrorKind::UnevaluatedProperties { unexpected }
+                    if unexpected.len() == 1 =>
+                {
+                    error.instance_path().join(unexpected[0].as_str())
+                }
+                ValidationErrorKind::Required { property } if property.is_string() => error
+                    .instance_path()
+                    .join(property.as_str().unwrap_or_default()),
+                _ => error.instance_path().clone(),
+            };
+            CatalogError::InvalidPayload {
                 name: name.to_owned(),
-                message: format!("at '{}': {}", error.instance_path(), error.masked()),
-            })
+                message: format!("at '{location}': {}", error.masked()),
+                path: base.map(|base| format!("{base}{location}")),
+            }
+        })
     }
 
     pub(crate) fn component_schema(&self, name: &str) -> &Value {
@@ -323,10 +371,12 @@ impl Catalog {
         &'a self,
         schema: &'a Value,
         payload: &'a Value,
-    ) -> BTreeMap<&'a str, String> {
+    ) -> BTreeMap<&'a str, (String, Location)> {
         let mut references = BTreeMap::new();
         for child in self.inspect_payload(schema, payload).children {
-            references.entry(child.id).or_insert(child.field);
+            references
+                .entry(child.id)
+                .or_insert((child.field, child.pointer));
         }
         references
     }
@@ -337,10 +387,10 @@ impl Catalog {
         payload: &'a Value,
     ) -> PayloadShape<'a> {
         let mut shape = PayloadShape::default();
-        let mut candidates = vec![(schema, payload, false, String::new())];
+        let mut candidates = vec![(schema, payload, false, String::new(), Location::new())];
         let mut visited = BTreeSet::new();
         let mut fields = BTreeSet::new();
-        while let Some((schema, data, common, path)) = candidates.pop() {
+        while let Some((schema, data, common, path, location)) = candidates.pop() {
             if !visited.insert((std::ptr::from_ref(schema), std::ptr::from_ref(data))) {
                 continue;
             }
@@ -389,13 +439,18 @@ impl Catalog {
                         shape.children.push(ChildReference {
                             id,
                             field,
+                            pointer: if collection.is_some() {
+                                location.join("componentId")
+                            } else {
+                                location
+                            },
                             collection,
                         });
                     }
                     continue;
                 }
                 if let Some(target) = self.schema_target(pointer, common) {
-                    candidates.push((target, data, common, path.clone()));
+                    candidates.push((target, data, common, path.clone(), location.clone()));
                 }
             }
             if let Some(kind) = inline_dynamic_kind(schema, common) {
@@ -404,36 +459,7 @@ impl Catalog {
                     .entry(std::ptr::from_ref(data))
                     .or_insert(kind);
             }
-            if let Some(properties) = schema["properties"].as_object() {
-                for (key, property) in properties.iter().rev() {
-                    if let Some(value) = data.get(key) {
-                        let field = if path.is_empty() {
-                            key.clone()
-                        } else {
-                            format!("{path}.{key}")
-                        };
-                        candidates.push((property, value, common, field));
-                    }
-                }
-            }
-            if let Some(array) = data.as_array() {
-                let prefix = schema["prefixItems"]
-                    .as_array()
-                    .map_or(&[][..], Vec::as_slice);
-                for (index, value) in array.iter().enumerate().rev() {
-                    let item = prefix.get(index).unwrap_or(&schema["items"]);
-                    candidates.push((item, value, common, format!("{path}[{index}]")));
-                }
-            }
-            for key in ["allOf", "anyOf", "oneOf"] {
-                if let Some(branches) = schema[key].as_array() {
-                    candidates.extend(
-                        branches
-                            .iter()
-                            .map(|branch| (branch, data, common, path.clone())),
-                    );
-                }
-            }
+            inspect_nested_payload(schema, data, common, &path, &location, &mut candidates);
         }
         shape
     }
@@ -448,6 +474,52 @@ impl Catalog {
             &self.document
         };
         document.pointer(&pointer)
+    }
+}
+
+fn inspect_nested_payload<'a>(
+    schema: &'a Value,
+    data: &'a Value,
+    common: bool,
+    path: &str,
+    location: &Location,
+    candidates: &mut Vec<PayloadCandidate<'a>>,
+) {
+    if let Some(properties) = schema["properties"].as_object() {
+        for (key, property) in properties.iter().rev() {
+            if let Some(value) = data.get(key) {
+                let field = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                candidates.push((property, value, common, field, location.join(key.as_str())));
+            }
+        }
+    }
+    if let Some(array) = data.as_array() {
+        let prefix = schema["prefixItems"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        for (index, value) in array.iter().enumerate().rev() {
+            let item = prefix.get(index).unwrap_or(&schema["items"]);
+            candidates.push((
+                item,
+                value,
+                common,
+                format!("{path}[{index}]"),
+                location.join(index),
+            ));
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema[key].as_array() {
+            candidates.extend(
+                branches
+                    .iter()
+                    .map(|branch| (branch, data, common, path.to_owned(), location.clone())),
+            );
+        }
     }
 }
 
@@ -495,6 +567,8 @@ pub enum CatalogError {
         name: String,
         /// The schema validation error.
         message: String,
+        /// The field location in the incoming component batch, when available.
+        path: Option<String>,
     },
 }
 
