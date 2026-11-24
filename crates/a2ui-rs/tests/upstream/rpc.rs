@@ -1,10 +1,13 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use a2ui_rs::basic_catalog::{FormattingOptions, register_formatting_functions};
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::{CallAgentFunction, RendererToAgentMessage};
-use a2ui_rs::resolution::LocalFunctions;
+use a2ui_rs::resolution::{DataScope, LocalFunctions};
+use a2ui_rs::routing::{EvaluationState, RoutingSession};
 use a2ui_rs::rpc::{CallOptions, PendingCall, ReceiveError, RpcError, RpcHandler};
 use a2ui_rs::validation::ValidationError;
 use serde_json::{Value, json};
@@ -56,6 +59,23 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                 | "test_rpc_call_renderer_function_with_surface_id_and_dynamic_args"
                 | "test_rpc_call_renderer_function_without_surface_id_isolated_data_model"
                 | "test_rpc_call_renderer_function_index_at_root_execution_error"
+                | "test_rpc_call_renderer_function_protocol_version_mismatch"
+                | "test_rpc_call_renderer_function_format_string_arg_inherits_catalog"
+        )
+        || activation_fixture(suite, case)
+}
+
+pub(super) fn activation_fixture(suite: &str, case: &Case) -> bool {
+    suite == "core/rpc_functions.yaml"
+        && case.action == "handle_rpc"
+        && case
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog["protocolVersion"] == "1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_rpc_call_renderer_function_requires_user_activation"
+                | "test_rpc_call_renderer_function_user_activation_denied"
         )
 }
 
@@ -66,6 +86,12 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let args = case.args.as_ref().ok_or("missing RPC fixture arguments")?;
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
     let basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+    if activation_fixture("core/rpc_functions.yaml", case) {
+        return execute_activation(case, args, &common);
+    }
+    if case.name == "test_rpc_call_renderer_function_protocol_version_mismatch" {
+        return execute_incompatible_catalog(case, args, &common);
+    }
     let mut handler = RpcHandler::default();
     if args.get("outboundCall").is_some() {
         execute_outbound(&mut handler, case, args, &common)
@@ -167,6 +193,130 @@ fn read_json(upstream: &Path, file: &str) -> Result<Value, TestError> {
     Ok(serde_json::from_slice(&fs::read(upstream.join(file))?)?)
 }
 
+fn execute_activation(case: &Case, args: &Value, common: &Value) -> Result<(), TestError> {
+    let activated = args["userActivationPresent"]
+        .as_bool()
+        .ok_or("missing activation flag")?;
+    let input = &args["message"];
+    let call = &input["callRendererFunction"]["callFunction"];
+    let id = call["catalogId"]
+        .as_str()
+        .ok_or("missing activation catalog ID")?;
+    let name = call["@call"]
+        .as_str()
+        .ok_or("missing activation function")?;
+    let meta = &args["functionMetadata"][name];
+    let mut document = json!({
+        "protocolVersion": "1.0", "catalogId": id,
+        "functions": { (name): {
+            "type": "object", "returnType": "object",
+            "properties": {"args": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            "requiresUserActivation": meta["requiresUserActivation"],
+            "allowedCallers": meta["allowedCallers"],
+        }},
+    });
+    if !matches!(
+        Catalog::from_json(document.clone(), common),
+        Err(CatalogError::InvalidCatalog(message)) if message.contains("Invalid requiresUserActivation")
+    ) {
+        return Err("expected rejection of agent-callable activation-gated function".into());
+    }
+    document["functions"][name]["allowedCallers"] = json!("rendererOnly");
+
+    let invoked = Cell::new(0);
+    let expected_url = call["args"]["url"].as_str().ok_or("missing test URL")?;
+    let mut functions = LocalFunctions::default();
+    functions.insert(id, name, |args| {
+        if args["url"] != expected_url {
+            return Err("unexpected activation argument".into());
+        }
+        invoked.set(invoked.get() + 1);
+        Ok(json!({"opened": true}))
+    });
+    let now = Instant::now();
+    let mut handler = RpcHandler::default();
+    handler.add_catalog(Catalog::from_json(document, common)?)?;
+    let response = serde_json::to_value(handler.receive_json(input, now, &functions)?)?;
+    let response = &response["rendererFunctionResponse"];
+    if response["functionCallId"] != input["callRendererFunction"]["functionCallId"]
+        || response["error"]["code"] != "INVALID_FUNCTION_CALL"
+        || !response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("rendererOnly"))
+        || invoked.get() != 0
+    {
+        return Err(format!("expected remote activation denial, got {response}").into());
+    }
+
+    create_surface(&mut handler, "activation", id, Value::Null, now, &functions)?;
+    let mut session = RoutingSession::new(handler, functions);
+    let evaluation =
+        session.run_action("activation", DataScope::default(), call.clone(), activated);
+    let update = session.advance(now, None);
+    let expected = &case
+        .expect
+        .as_ref()
+        .ok_or("missing activation expectation")?["response"]["rendererFunctionResponse"];
+    if activated {
+        if invoked.get() != 1
+            || !update.errors.is_empty()
+            || session.value(evaluation).as_ref() != expected.get("value")
+        {
+            return Err(format!(
+                "expected the user gesture to run once, got {} invocations and {:?}",
+                invoked.get(),
+                session.status(evaluation)
+            )
+            .into());
+        }
+    } else if invoked.get() != 0
+        || expected["error"]["code"] != "INVALID_FUNCTION_CALL"
+        || !matches!(
+            session.status(evaluation),
+            Some(EvaluationState::Failed(error))
+                if error.code == "EXPRESSION_ERROR" && error.message.contains("requires user activation")
+        )
+        || update.errors.len() != 1
+    {
+        return Err("expected the local action to fail without a user gesture".into());
+    }
+    Ok(())
+}
+
+fn execute_incompatible_catalog(
+    case: &Case,
+    args: &Value,
+    common: &Value,
+) -> Result<(), TestError> {
+    let input = &args["message"];
+    let id = args["catalogId"]
+        .as_str()
+        .ok_or("missing incompatible catalog ID")?;
+    let document = json!({"protocolVersion": args["catalogVersion"], "catalogId": id});
+    if input["callRendererFunction"]["callFunction"]["catalogId"] != id
+        || !matches!(
+            Catalog::from_json(document, common),
+            Err(CatalogError::InvalidCatalog(message)) if message.contains("protocolVersion 1.0")
+        )
+    {
+        return Err("expected v1.0 catalog loading to reject the older catalog".into());
+    }
+    let mut handler = RpcHandler::default();
+    let actual = handler.receive_json(input, Instant::now(), &LocalFunctions::default())?;
+    let mut expected = case
+        .expect
+        .as_ref()
+        .ok_or("missing version mismatch expectation")?["response"]
+        .clone();
+    let message = &mut expected["rendererFunctionResponse"]["error"]["message"];
+    if message != "does not match message protocol version" {
+        return Err("unexpected version mismatch fixture diagnostic".into());
+    }
+    // The v1.0 catalog loader rejects the version before it can enter the registry.
+    *message = json!(format!("Catalog not found: {id}"));
+    assert_response(&expected, &serde_json::to_value(actual)?)
+}
+
 fn execute_inbound(
     handler: &mut RpcHandler,
     case: &Case,
@@ -188,6 +338,13 @@ fn execute_inbound(
         json!({"protocolVersion": "1.0", "catalogId": catalog_id, "functions": {}})
     };
     let mut functions = LocalFunctions::default();
+    if case.name == "test_rpc_call_renderer_function_format_string_arg_inherits_catalog" {
+        register_formatting_functions(
+            &mut functions,
+            "basic",
+            FormattingOptions::new("en-US", "UTC")?,
+        );
+    }
     for (name, meta) in args["functionMetadata"].as_object().into_iter().flatten() {
         let mut schema = json!({"type": "object", "properties": {"args": {"type": "object"} }});
         for key in ["allowedCallers", "requiresUserActivation"] {
