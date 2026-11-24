@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use a2ui_rs::catalog::Catalog;
+use a2ui_rs::data_model::DataError;
 use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage};
 use a2ui_rs::surface::SurfaceError;
 use a2ui_rs::validation::{MessageProcessor, ValidationConfig, ValidationError};
@@ -13,7 +14,20 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
     if suite == "core/error_responses.yaml" {
         return case.action == "validate"
             && case.protocol_version.as_deref() == Some("1.0")
-            && case.name == "test_error_response_create_surface_unknown_catalog_id";
+            && matches!(
+                case.name.as_str(),
+                "test_error_response_create_surface_unknown_catalog_id"
+                    | "test_error_response_create_surface_duplicate_surface_id"
+                    | "test_error_response_update_components_unknown_surface"
+                    | "test_error_response_update_components_duplicate_id_in_batch"
+                    | "test_error_response_update_components_circular_reference"
+                    | "test_error_response_update_components_dangling_child_strict"
+                    | "test_error_response_update_components_orphaned_component_strict"
+                    | "test_error_response_update_components_buffered_streaming_non_strict"
+                    | "test_error_response_update_data_model_unknown_surface"
+                    | "test_error_response_update_data_model_prototype_pollution"
+                    | "test_error_response_update_data_model_invalid_json_pointer"
+            );
     }
     suite == super::SURFACE_SUITE
         && case.action == "process_messages"
@@ -247,7 +261,7 @@ fn apply_messages(
                 if processor.get(&surface) != before.as_ref() {
                     return Err(format!("rejected message changed surface {surface}").into());
                 }
-                return assert_transaction_error(expected, &surface, &error);
+                return assert_transaction_error(case, expected, &surface, &error);
             }
             let category = error_category(&error, expected, case);
             let code = match error {
@@ -269,6 +283,7 @@ fn transaction_surface(message: &AgentToRendererMessage) -> Result<&str, TestErr
     match operation {
         AgentToRenderer::CreateSurface(create) => Ok(&create.surface_id),
         AgentToRenderer::UpdateComponents(update) => Ok(&update.surface_id),
+        AgentToRenderer::UpdateDataModel(update) => Ok(&update.surface_id),
         _ => Err("unexpected transaction fixture operation".into()),
     }
 }
@@ -289,6 +304,7 @@ fn error_category(error: &ValidationError, expected: &Value, case: &Case) -> &'s
 }
 
 fn assert_transaction_error(
+    case: &Case,
     expected: &Value,
     surface: &str,
     error: &ValidationError,
@@ -298,15 +314,26 @@ fn assert_transaction_error(
         .ok_or("missing transaction error fields")?
         .clone();
     let renderer = core.remove("rendererError");
+    let path = core.remove("path");
     if core.remove("surfaceId").is_some_and(|id| id != surface) {
         return Err("transaction failed on the wrong surface".into());
     }
     let message = error.to_string();
     let category = match error {
-        ValidationError::Surface(SurfaceError::DuplicateComponent(_))
+        ValidationError::CircularReference(_) if case.action == "validate" => "RecursionError",
+        ValidationError::Surface(
+            SurfaceError::DuplicateComponent(_)
+            | SurfaceError::DuplicateSurface(_)
+            | SurfaceError::UnknownSurface(_),
+        )
         | ValidationError::CircularReference(_)
-        | ValidationError::Orphan(_) => "IntegrityError",
-        ValidationError::DanglingReference { .. } => "ValidationError",
+        | ValidationError::Orphan(_)
+        | ValidationError::DanglingReference { .. } => "IntegrityError",
+        ValidationError::Surface(SurfaceError::Data {
+            source: DataError::InvalidPointer(_),
+            ..
+        }) => "ValidationError",
+        ValidationError::Surface(SurfaceError::Data { .. }) => "DataError",
         ValidationError::MissingCatalog | ValidationError::UnknownCatalog(_) => "CatalogError",
         _ => return Err(format!("unexpected transaction failure: {error}").into()),
     };
@@ -318,6 +345,12 @@ fn assert_transaction_error(
             .renderer_error(surface)
             .ok_or("missing renderer error envelope")?;
         let actual = serde_json::to_value(outbound)?;
+        if path
+            .as_ref()
+            .is_some_and(|path| &actual["error"]["path"] != path)
+        {
+            return Err(format!("renderer error has the wrong field path: {actual}").into());
+        }
         let actual_message = actual["error"]["message"]
             .as_str()
             .ok_or("missing error message")?;
@@ -331,6 +364,8 @@ fn assert_transaction_error(
         if actual != renderer {
             return Err(format!("expected renderer error {renderer}, got {actual}").into());
         }
+    } else if path.is_some() {
+        return Err("transaction error expects a field path without a renderer envelope".into());
     }
     assert_rejection(&Value::Object(core), category, None, &message)
 }
