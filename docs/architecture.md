@@ -127,20 +127,26 @@ Use `CallOptions` to mark a renderer-initiated call that comes from an active us
 
 Use `RoutingSession` to evaluate bindings, checks, and actions that can call the agent.
 Mount a component property with `mount_property`.
-Use `mount_binding` for a standalone expression. Use `mount_check` for a check condition.
+Use `mount_binding` for a standalone expression. Use `mount_check` for a standalone check condition.
+Use `mount_check_rule` for a component's `@checks` entry. Supply its zero-based index.
+Use `validation_result` to read the rule result, including its message, severity, and additional fields.
+Use `ValidationResult::is_blocking` to find failures that prevent submission.
 Use `run_action` for a function action. Use `dispatch_event` for an event with ordered context entries.
 Use `unmount` when the renderer discards a binding, check, or completed action.
 
 Pass inbound messages to `receive`. Call `advance` after a message, data change, or deadline.
 Supply the outbound transport callback to `advance`.
 Use its result to update the changed evaluations and send renderer errors.
-The evaluation status contains the result, including a returned validation result object.
 A pending check passes until the call completes. An agent error makes the check fail.
 
 The session uses the local implementation when the catalog has one.
 If no local implementation exists, the session sends the validated call to the agent.
 Bindings and checks share identical requests on the same surface and can use cached answers.
 An action sends a new request for each invocation.
+Use `LocalFunctions::insert_action` to register a local function that changes surface data.
+The action context reads and writes paths in the action's scope.
+The session applies a successful function's writes before it runs the next step.
+If a function fails, the action stops. The session keeps the writes from earlier successful functions.
 Event context entries resolve in order. An error stops the event before dispatch.
 
 ## Public API checks

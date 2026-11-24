@@ -144,7 +144,79 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the component type is unknown or a property is invalid.
     pub fn validate_component(&self, component: &Component) -> Result<(), CatalogError> {
+        if component.properties.contains_key("checks")
+            && self.checks_key(component)? == Some("checks")
+        {
+            let mut normalized = component.clone();
+            if let Some(checks) = normalized.properties.remove("checks") {
+                normalized.properties.insert("@checks".to_owned(), checks);
+            }
+            return self.validate_entry(&self.components, &component.component, &normalized);
+        }
         self.validate_entry(&self.components, &component.component, component)
+    }
+
+    pub(crate) fn component_checks<'a>(
+        &self,
+        component: &'a Component,
+    ) -> Result<Option<&'a Value>, CatalogError> {
+        Ok(self
+            .checks_key(component)?
+            .and_then(|key| component.properties.get(key)))
+    }
+
+    fn checks_key(&self, component: &Component) -> Result<Option<&'static str>, CatalogError> {
+        let canonical = component.properties.contains_key("@checks");
+        let bare = component.properties.contains_key("checks");
+        if !canonical && !bare {
+            return Ok(None);
+        }
+        let (checkable, custom_checks) =
+            self.check_traits(self.component_schema(&component.component));
+        if !checkable {
+            return Ok(None);
+        }
+        if canonical && bare && !custom_checks {
+            return Err(CatalogError::InvalidPayload {
+                name: component.component.clone(),
+                message: "Component provides both '@checks' and its 'checks' alias".to_owned(),
+            });
+        }
+        Ok(if canonical {
+            Some("@checks")
+        } else if !custom_checks {
+            Some("checks")
+        } else {
+            None
+        })
+    }
+
+    fn check_traits(&self, schema: &Value) -> (bool, bool) {
+        let mut pending = vec![(schema, false)];
+        let mut visited = BTreeSet::new();
+        let mut checkable = false;
+        let mut custom_checks = false;
+        while let Some((schema, common)) = pending.pop() {
+            if !visited.insert(std::ptr::from_ref(schema)) {
+                continue;
+            }
+            if !common && schema["properties"].get("checks").is_some() {
+                custom_checks = true;
+            }
+            if let Some(reference) = schema["$ref"].as_str() {
+                let (pointer, common) =
+                    common_ref(reference).map_or((reference, common), |pointer| (pointer, true));
+                if common && pointer == "#/$defs/Checkable" {
+                    checkable = true;
+                } else if let Some(target) = self.schema_target(pointer, common) {
+                    pending.push((target, common));
+                }
+            }
+            if let Some(schemas) = schema["allOf"].as_array() {
+                pending.extend(schemas.iter().map(|schema| (schema, common)));
+            }
+        }
+        (checkable, custom_checks)
     }
 
     /// Checks a function call against this catalog.

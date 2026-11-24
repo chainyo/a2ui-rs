@@ -82,6 +82,10 @@ Report partial coverage as partial coverage.
 A conformance gate must fail when required v1.0 cases are pending or failed.
 Inventory success must never become that gate.
 
+The RPC fixtures exercise errors in mounted checks and action pipelines.
+Check cases compare the validation result and the correlated renderer error.
+Action cases compare the surface data and the correlated renderer error.
+
 ## Updates
 
 Dependabot checks the submodule weekly and opens a pull request for an updated pin.

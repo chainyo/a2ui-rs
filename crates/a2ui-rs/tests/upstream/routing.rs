@@ -18,6 +18,8 @@ mod ui;
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
     ui::supports(suite, case)
+        || ui::supports_check_metadata(suite, case)
+        || ui::supports_local_action(suite, case)
         || (suite == "core/agent_function_routing.yaml"
             && case.action == "route_agent_function"
             && case.protocol_version.as_deref() == Some("1.0")
@@ -27,6 +29,12 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     if case.action == "handle_rpc" {
         return ui::execute(upstream, case);
+    }
+    if case.action == "validate" {
+        return ui::execute_check_metadata(upstream, case);
+    }
+    if case.action == "dispatch_action" {
+        return ui::execute_local_action(upstream, case);
     }
     let mut session = build_session(upstream, case)?;
     let now = Instant::now();

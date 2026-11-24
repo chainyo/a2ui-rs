@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use super::check::{CheckRule, ValidationResult};
 use super::{
     Evaluation, EvaluationState, EventAction, EventProgress, Flight, Path, RouterState,
     RoutingError, Slot, SlotState, Task,
@@ -14,7 +15,8 @@ use crate::protocol::{
     Action, CallAgentFunction, FunctionCall, JsonObject, RendererToAgent, RendererToAgentMessage,
 };
 use crate::resolution::{
-    DataScope, LocalFunctions, Resolver, coerce, index_with_offset, validate_call_shape,
+    ActionContext, DataScope, LocalFunctions, ResolveError, Resolver, coerce, index_with_offset,
+    validate_call_shape,
 };
 use crate::rpc::{Outbound, RpcError, RpcHandler};
 
@@ -109,12 +111,24 @@ impl Tick<'_, '_, '_> {
             saw_suppressed: false,
         };
         let location = Location::default();
+        let mut mounted_rule = None;
         let result = match &evaluation.task {
             Task::Binding(value)
             | Task::Check(value)
             | Task::FunctionAction { call: value, .. } => {
                 self.resolve(&mut context, value, &location, &BTreeMap::new())
             }
+            Task::CheckRule { component, index } => self
+                .check_rule(context.surface, component, *index)
+                .and_then(|rule| {
+                    mounted_rule = rule;
+                    match &mounted_rule {
+                        Some(rule) => {
+                            self.resolve(&mut context, &rule.condition, &location, &BTreeMap::new())
+                        }
+                        None => Ok(Progress::Ready(None)),
+                    }
+                }),
             Task::Event { event, .. } => self.event(&mut context, event, &mut evaluation.event),
             Task::Property {
                 component,
@@ -127,6 +141,8 @@ impl Tick<'_, '_, '_> {
             Ok(Progress::Ready(value)) => EvaluationState::Ready(value.unwrap_or(Value::Null)),
             Err(error) => EvaluationState::Failed(error),
         };
+        evaluation.validation_result =
+            mounted_rule.map(|rule| ValidationResult::from_check(&outcome, rule.message));
         let retry = context.saw_suppressed && outcome == EvaluationState::Pending;
         context.slots.retain(|path, slot| {
             if context.visited.contains(path) {
@@ -144,18 +160,37 @@ impl Tick<'_, '_, '_> {
         (outcome, context.diagnostics, retry)
     }
 
+    fn component(&self, surface: &str, id: &str) -> Option<&crate::protocol::Component> {
+        self.rpc.processor().get(surface).and_then(|surface| {
+            surface
+                .components()
+                .iter()
+                .find(|component| component.id == id)
+        })
+    }
+
+    fn check_rule(
+        &self,
+        surface: &str,
+        id: &str,
+        index: usize,
+    ) -> Result<Option<CheckRule>, RoutingError> {
+        let Some(component) = self.component(surface, id) else {
+            return Ok(None);
+        };
+        let catalog = self.catalog_id(surface, component.catalog_id.clone())?;
+        let catalog = self.lookup_catalog(&catalog)?;
+        catalog
+            .component_checks(component)
+            .map_err(RoutingError::expression)?
+            .and_then(Value::as_array)
+            .and_then(|checks| checks.get(index))
+            .map(|rule| serde_json::from_value(rule.clone()).map_err(RoutingError::expression))
+            .transpose()
+    }
+
     fn property(&mut self, context: &mut Context<'_>, id: &str, name: &str) -> EvalResult {
-        let Some(component) = self
-            .rpc
-            .processor()
-            .get(context.surface)
-            .and_then(|surface| {
-                surface
-                    .components()
-                    .iter()
-                    .find(|component| component.id == id)
-            })
-        else {
+        let Some(component) = self.component(context.surface, id) else {
             return Ok(Progress::Ready(None));
         };
         let catalog = self.catalog_id(context.surface, component.catalog_id.clone())?;
@@ -309,6 +344,7 @@ impl Tick<'_, '_, '_> {
                     resolved.insert(key.to_owned(), value);
                 }
                 Progress::Ready(None) => {}
+                Progress::Waiting if context.imperative => return Ok(Progress::Waiting),
                 Progress::Waiting => waiting = true,
                 Progress::Cancelled => return Ok(Progress::Cancelled),
             }
@@ -337,6 +373,7 @@ impl Tick<'_, '_, '_> {
                         "An array element has no JSON value",
                     ));
                 }
+                Progress::Waiting if context.imperative => return Ok(Progress::Waiting),
                 Progress::Waiting => waiting = true,
                 Progress::Cancelled => return Ok(Progress::Cancelled),
             }
@@ -360,6 +397,17 @@ impl Tick<'_, '_, '_> {
             ));
         }
         validate_call_shape(&call).map_err(RoutingError::expression)?;
+        if context.imperative
+            && let Some(key) = context
+                .slots
+                .get(&location.path)
+                .map(|slot| slot.key.clone())
+        {
+            context.visited.insert(location.path.clone());
+            if let Some(result) = self.reuse_slot(context, location, &key, 0) {
+                return result;
+            }
+        }
         if call.name == "@index" {
             let index = context.scope.index().ok_or_else(|| {
                 RoutingError::expression(crate::resolution::ResolveError::IndexScope)
@@ -550,7 +598,7 @@ impl Tick<'_, '_, '_> {
     }
 
     fn local(
-        &self,
+        &mut self,
         context: &mut Context<'_>,
         catalog: &str,
         call: &FunctionCall,
@@ -561,9 +609,32 @@ impl Tick<'_, '_, '_> {
             .processor()
             .get(context.surface)
             .ok_or_else(|| RoutingError::expression("Unknown surface"))?;
-        let resolver = Resolver::new(surface, &self.rpc.processor().catalogs, self.functions);
         let empty = JsonObject::new();
         let args = call.args.as_ref().unwrap_or(&empty);
+        if let Some(action) = self.functions.action(catalog, &call.name) {
+            if !context.imperative {
+                return Err(RoutingError::expression(
+                    ResolveError::ActionContextRequired(call.name.clone()),
+                ));
+            }
+            let original = surface.data_model();
+            let mut data = original.clone();
+            let value = action(args, &mut ActionContext::new(context.scope, &mut data))
+                .map_err(|error| RoutingError::new("EXECUTION_ERROR", error))?;
+            if &data != original {
+                self.rpc
+                    .write_binding(
+                        context.surface,
+                        &DataScope::default(),
+                        "/",
+                        data.root().clone(),
+                    )
+                    .map_err(|error| RoutingError::new("EXECUTION_ERROR", error.to_string()))?;
+                self.state.bump(context.surface);
+            }
+            return Ok(value);
+        }
+        let resolver = Resolver::new(surface, &self.rpc.processor().catalogs, self.functions);
         if call.name == "formatString" {
             let template = args
                 .get("value")

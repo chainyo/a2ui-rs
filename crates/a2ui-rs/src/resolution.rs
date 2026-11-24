@@ -107,7 +107,44 @@ impl DataScope {
     }
 }
 
-type Handler<'a> = Box<dyn Fn(&JsonObject) -> Result<Value, String> + 'a>;
+/// The data scope for a local action function.
+pub struct ActionContext<'a> {
+    scope: &'a DataScope,
+    data: &'a mut DataModel,
+}
+
+impl<'a> ActionContext<'a> {
+    pub(crate) fn new(scope: &'a DataScope, data: &'a mut DataModel) -> Self {
+        Self { scope, data }
+    }
+
+    /// Reads data at a relative or absolute path on the action's surface.
+    ///
+    /// # Errors
+    /// Returns an error if the data model rejects the path.
+    pub fn get(&self, path: &str) -> Result<Option<&Value>, DataError> {
+        self.scope.read(self.data, path)
+    }
+
+    /// Writes data at a relative or absolute path on the action's surface.
+    ///
+    /// The writes from this function take effect when it returns successfully.
+    ///
+    /// # Errors
+    /// Returns an error if the data model rejects the path or value.
+    pub fn set(&mut self, path: &str, value: Value) -> Result<(), DataError> {
+        self.scope.write(self.data, path, value)
+    }
+}
+
+type PureHandler<'a> = dyn Fn(&JsonObject) -> Result<Value, String> + 'a;
+pub(crate) type ActionHandler<'a> =
+    dyn Fn(&JsonObject, &mut ActionContext<'_>) -> Result<Value, String> + 'a;
+
+enum Handler<'a> {
+    Pure(Box<PureHandler<'a>>),
+    Action(Box<ActionHandler<'a>>),
+}
 
 /// Caller-supplied local functions, indexed by catalog ID and function name.
 #[derive(Default)]
@@ -117,9 +154,7 @@ pub struct LocalFunctions<'a> {
 
 impl<'a> LocalFunctions<'a> {
     pub(crate) fn contains(&self, catalog: &str, name: &str) -> bool {
-        self.handlers
-            .get(catalog)
-            .is_some_and(|functions| functions.contains_key(name))
+        self.handler(catalog, name).is_some()
     }
     /// Registers a handler. A later registration replaces the handler for the same function.
     pub fn insert(
@@ -131,7 +166,33 @@ impl<'a> LocalFunctions<'a> {
         self.handlers
             .entry(catalog_id.into())
             .or_default()
-            .insert(name.into(), Box::new(handler));
+            .insert(name.into(), Handler::Pure(Box::new(handler)));
+    }
+
+    /// Registers a local function with access to the action's surface data.
+    ///
+    /// The function can run only in a renderer action.
+    pub fn insert_action(
+        &mut self,
+        catalog_id: impl Into<String>,
+        name: impl Into<String>,
+        handler: impl Fn(&JsonObject, &mut ActionContext<'_>) -> Result<Value, String> + 'a,
+    ) {
+        self.handlers
+            .entry(catalog_id.into())
+            .or_default()
+            .insert(name.into(), Handler::Action(Box::new(handler)));
+    }
+
+    pub(crate) fn action(&self, catalog: &str, name: &str) -> Option<&ActionHandler<'a>> {
+        match self.handler(catalog, name) {
+            Some(Handler::Action(handler)) => Some(handler.as_ref()),
+            _ => None,
+        }
+    }
+
+    fn handler(&self, catalog: &str, name: &str) -> Option<&Handler<'a>> {
+        self.handlers.get(catalog)?.get(name)
     }
 
     pub(crate) fn invoke(
@@ -140,15 +201,16 @@ impl<'a> LocalFunctions<'a> {
         name: &str,
         args: &JsonObject,
     ) -> Result<Value, ResolveError> {
-        let handler = self
-            .handlers
-            .get(catalog_id)
-            .and_then(|functions| functions.get(name))
-            .ok_or_else(|| ResolveError::MissingHandler {
-                catalog_id: catalog_id.to_owned(),
-                name: name.to_owned(),
-            })?;
-        handler(args).map_err(ResolveError::LocalFunction)
+        let handler =
+            self.handler(catalog_id, name)
+                .ok_or_else(|| ResolveError::MissingHandler {
+                    catalog_id: catalog_id.to_owned(),
+                    name: name.to_owned(),
+                })?;
+        match handler {
+            Handler::Pure(handler) => handler(args).map_err(ResolveError::LocalFunction),
+            Handler::Action(_) => Err(ResolveError::ActionContextRequired(name.to_owned())),
+        }
     }
 }
 
@@ -366,6 +428,9 @@ impl<'a, 'f> Resolver<'a, 'f> {
         }
         if catalog.requires_activation(&call.name) {
             return Err(ResolveError::UserActivation(call.name));
+        }
+        if self.functions.action(catalog.id(), &call.name).is_some() {
+            return Err(ResolveError::ActionContextRequired(call.name));
         }
         catalog.validate_function(&call)?;
         let args = self.catalog_arguments(scope, &call, catalog, template_catalog, nested)?;
@@ -627,6 +692,9 @@ pub enum ResolveError {
     /// The function needs a user action.
     #[error("Function '{0}' requires user activation")]
     UserActivation(String),
+    /// The function needs a renderer action context.
+    #[error("Function '{0}' requires an action context")]
+    ActionContextRequired(String),
     /// The function has no registered implementation.
     #[error("No local function '{name}' for catalog '{catalog_id}'")]
     MissingHandler {
