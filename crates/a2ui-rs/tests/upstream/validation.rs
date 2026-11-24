@@ -14,9 +14,17 @@ use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
 
+const COMPOSITION_SUITE: &str = "core/composition_constraints.yaml";
 const RESERVED_KEYS_SUITE: &str = "core/reserved_keys.yaml";
 
 fn supports_transaction(suite: &str, case: &Case) -> bool {
+    if suite == COMPOSITION_SUITE {
+        return matches!(case.action.as_str(), "process_messages" | "validate")
+            && case
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog["protocolVersion"] == "1.0");
+    }
     if suite == "core/error_responses.yaml" {
         return case.action == "validate"
             && case.protocol_version.as_deref() == Some("1.0")
@@ -84,17 +92,6 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
     }
     if supports_transaction(suite, case) {
         return true;
-    }
-    if suite == "core/composition_constraints.yaml" && case.action == "process_messages" {
-        return matches!(
-            case.name.as_str(),
-            "test_composition_dropped_child_is_not_checked_against_surface"
-                | "test_composition_dropped_child_is_not_checked_against_surface_when_references_may_dangle"
-                | "test_composition_dropped_child_is_reported_as_orphan"
-                | "test_composition_root_referenced_by_another_component_checked_against_surface"
-                | "test_composition_multiple_parents_disallowed_first"
-                | "test_composition_multiple_parents_disallowed_second"
-        );
     }
     if suite == "core/catalog.yaml" && case.action == "from_json" {
         return matches!(
@@ -206,12 +203,11 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         return execute_catalog_steps(upstream, case, &common, &mut processor);
     }
     if let Some(document) = &case.catalog {
-        let mut document = catalog_document(case, document)?;
-        if case.name.starts_with("test_composition_") {
-            // These fixtures use a local alias for the standard child list.
-            document["$defs"] =
-                json!({"ChildList": {"$ref": "common_types.json#/$defs/ChildList"}});
-        }
+        let document = if suite == COMPOSITION_SUITE {
+            composition_catalog(upstream, document)?
+        } else {
+            catalog_document(case, document)?
+        };
         processor.add_catalog(Catalog::from_json(document, &common)?)?;
     }
 
@@ -233,10 +229,18 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
                 .map_or(Ok(()), |expect| assert_state(&processor, expect))
         });
     }
+    execute_validation_steps(&mut processor, case, transaction)
+}
+
+fn execute_validation_steps(
+    processor: &mut MessageProcessor,
+    case: &Case,
+    transaction: bool,
+) -> Result<(), TestError> {
     if case.steps.is_empty() {
         return Err("missing validation steps".into());
     }
-    for step in &case.steps {
+    for (index, step) in case.steps.iter().enumerate() {
         let messages = step
             .get("messages")
             .or_else(|| step.get("payload"))
@@ -246,22 +250,51 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             .cloned()
             .map(serde_json::from_value)
             .transpose()?;
+        let expected_error = step.get("expectError").or_else(|| {
+            if index + 1 == case.steps.len() {
+                case.expect_error.as_ref()
+            } else {
+                None
+            }
+        });
         apply_messages(
-            &mut processor,
+            processor,
             case,
             messages,
             rules,
-            step.get("expectError"),
+            expected_error,
             transaction,
         )?;
         if let Some(expect) = step.get("expect") {
-            assert_state(&processor, expect)?;
+            assert_state(processor, expect)?;
         }
     }
     if let Some(expect) = &case.expect {
-        assert_state(&processor, expect)?;
+        assert_state(processor, expect)?;
     }
     Ok(())
+}
+
+fn composition_catalog(upstream: &Path, document: &Value) -> Result<Value, TestError> {
+    if let Some(schema) = document.get("catalogSchema") {
+        let mut schema = schema.clone();
+        schema["protocolVersion"] = document["protocolVersion"].clone();
+        return Ok(schema);
+    }
+    if document.get("catalogId").is_some() {
+        let mut document = document.clone();
+        if document["$defs"].get("ChildList").is_none() {
+            // The fixtures use a local name for the standard child list.
+            document["$defs"]["ChildList"] = json!({"$ref": "common_types.json#/$defs/ChildList"});
+        }
+        return Ok(document);
+    }
+
+    let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+    basic["catalogId"] = json!("basic");
+    // The implicit-parent fixture requires Column to allow Surface.
+    basic["components"]["Column"]["allowedParents"] = json!(["Surface"]);
+    Ok(basic)
 }
 
 fn execute_reserved_keys(upstream: &Path, case: &Case, common: &Value) -> Result<(), TestError> {
@@ -568,6 +601,11 @@ fn assert_transaction_error(
         envelope = Some(actual);
     } else if path.is_some() || details.is_some() {
         return Err("transaction error expects field details without a renderer envelope".into());
+    } else if core.contains_key("code") {
+        let outbound = error
+            .renderer_error(surface)
+            .ok_or("missing renderer error code")?;
+        envelope = Some(serde_json::to_value(outbound)?);
     }
     let renderer_code = envelope
         .as_ref()
