@@ -17,6 +17,7 @@ use super::{Case, TestError, assert_surface_components};
 #[path = "catalog.rs"]
 mod catalog_cases;
 
+const VALIDATOR_SUITE: &str = "core/validator_v1_0.yaml";
 const CATALOG_SUITE: &str = "core/catalog.yaml";
 const COMPOSITION_SUITE: &str = "core/composition_constraints.yaml";
 const RESERVED_KEYS_SUITE: &str = "core/reserved_keys.yaml";
@@ -93,41 +94,9 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
             || case.name.starts_with("test_v10_")
             || case.name == "test_catalog_from_json_missing_catalog_id_error");
     }
-    suite == "core/validator_v1_0.yaml"
+    suite == VALIDATOR_SUITE
         && case.action == "validate"
         && case.protocol_version.as_deref() == Some("1.0")
-        && matches!(
-            case.name.as_str(),
-            "test_v10_topology_circular_reference_error"
-                | "test_v10_topology_dangling_child_reference_error"
-                | "test_v10_topology_self_reference_error"
-                | "test_v10_topology_orphaned_component_error"
-                | "test_v10_topology_missing_root_component_error"
-                | "test_v10_topology_template_child_reachable"
-                | "test_v10_topology_template_dangling_reference_error"
-                | "test_v10_component_nesting_depth_limit_exceeded_error"
-                | "test_v10_component_nesting_depth_within_limit"
-                | "test_v10_multi_surface_independent_roots"
-                | "test_v10_multi_surface_missing_root_error"
-                | "test_v10_incremental_update_without_root"
-                | "test_v10_incremental_update_self_reference_error"
-                | "test_v10_incremental_update_circular_reference_error"
-                | "test_v10_incremental_update_duplicate_component_id_error"
-                | "test_v10_topology_structured_array_item_dangling_child_error"
-                | "test_v10_topology_plain_string_property_not_treated_as_child_ref"
-                | "test_v10_topology_component_id_array_dangling_reference_error"
-                | "test_v10_topology_component_id_array_child_reachable"
-                | "test_v10_topology_component_id_array_partial_dangling_reference_error"
-                | "test_v10_topology_component_id_array_circular_reference_error"
-                | "test_v10_child_list_template_missing_path_error"
-                | "test_v10_child_list_template_rejects_at_path_error"
-                | "test_v10_incremental_update_same_component_id_across_messages"
-                | "test_v10_component_nesting_depth_at_limit"
-                | "test_v10_component_nesting_depth_one_past_limit_error"
-                | "test_v10_recursion_limit_function_call_depth_at_limit"
-                | "test_v10_recursion_limit_function_call_depth_one_past_limit_error"
-                | "test_v10_validate_at_prefixed_component_envelope_mixins"
-        )
 }
 
 pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
@@ -148,6 +117,13 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         });
     let mut processor = MessageProcessor::new(config);
     let transaction = supports_transaction(suite, case);
+    let checks = if suite == VALIDATOR_SUITE {
+        MessageChecks::Validator
+    } else if transaction {
+        MessageChecks::Transaction
+    } else {
+        MessageChecks::Standard
+    };
     register_fixture_catalogs(upstream, suite, case, &common, &mut processor, transaction)?;
     if suite == "core/add_catalog.yaml" {
         return execute_catalog_steps(upstream, case, &common, &mut processor);
@@ -181,7 +157,7 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             messages,
             None,
             case.expect_error.as_ref(),
-            transaction,
+            checks,
         )
         .and_then(|()| {
             case.expect
@@ -189,7 +165,7 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
                 .map_or(Ok(()), |expect| assert_state(&processor, expect))
         });
     }
-    execute_validation_steps(&mut processor, case, transaction)
+    execute_validation_steps(&mut processor, case, checks)
 }
 
 fn register_fixture_catalogs(
@@ -359,10 +335,17 @@ fn assert_renderer_metadata(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageChecks {
+    Standard,
+    Transaction,
+    Validator,
+}
+
 fn execute_validation_steps(
     processor: &mut MessageProcessor,
     case: &Case,
-    transaction: bool,
+    checks: MessageChecks,
 ) -> Result<(), TestError> {
     if case.steps.is_empty() {
         return Err("missing validation steps".into());
@@ -384,14 +367,7 @@ fn execute_validation_steps(
                 None
             }
         });
-        apply_messages(
-            processor,
-            case,
-            messages,
-            rules,
-            expected_error,
-            transaction,
-        )?;
+        apply_messages(processor, case, messages, rules, expected_error, checks)?;
         if let Some(expect) = step.get("expect") {
             assert_state(processor, expect)?;
         }
@@ -450,7 +426,7 @@ fn execute_reserved_keys(upstream: &Path, case: &Case, common: &Value) -> Result
         messages,
         None,
         case.expect_error.as_ref(),
-        true,
+        MessageChecks::Transaction,
     )?;
     if case.action == "validate" {
         return Ok(());
@@ -549,7 +525,14 @@ fn execute_catalog_steps(
                     return Err("fixture has two catalog overrides".into());
                 }
             }
-            apply_messages(processor, case, &messages, None, expected, true)?;
+            apply_messages(
+                processor,
+                case,
+                &messages,
+                None,
+                expected,
+                MessageChecks::Transaction,
+            )?;
         } else {
             let [path] = paths.as_slice() else {
                 return Err("expected one catalog registration".into());
@@ -577,18 +560,29 @@ fn apply_messages(
     messages: &Value,
     rules: Option<ValidationConfig>,
     expected: Option<&Value>,
-    transaction: bool,
+    checks: MessageChecks,
 ) -> Result<(), TestError> {
     let messages = messages
         .as_array()
         .filter(|items| !items.is_empty())
         .ok_or("missing validation messages")?;
     for (index, message) in messages.iter().enumerate() {
-        let decoded: AgentToRendererMessage = serde_json::from_value(message.clone())?;
-        let surface = if transaction {
-            Some(transaction_surface(&decoded)?.to_owned())
-        } else {
+        let decoded: AgentToRendererMessage = match serde_json::from_value(message.clone()) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                if checks == MessageChecks::Validator
+                    && index + 1 == messages.len()
+                    && let Some(expected) = expected
+                {
+                    return assert_envelope_rejection(case, index, expected, &error);
+                }
+                return Err(error.into());
+            }
+        };
+        let surface = if checks == MessageChecks::Standard {
             None
+        } else {
+            Some(transaction_surface(&decoded)?.to_owned())
         };
         let before = surface.as_deref().and_then(|id| processor.get(id)).cloned();
         let result = match rules {
@@ -604,7 +598,9 @@ fn apply_messages(
                 if processor.get(&surface) != before.as_ref() {
                     return Err(format!("rejected message changed surface {surface}").into());
                 }
-                return assert_transaction_error(case, expected, &surface, &error);
+                if checks == MessageChecks::Transaction || expected.get("rendererError").is_some() {
+                    return assert_transaction_error(case, expected, &surface, &error);
+                }
             }
             let category = error_category(&error, expected, case);
             let code = match error {
@@ -621,6 +617,38 @@ fn apply_messages(
     Ok(())
 }
 
+fn assert_envelope_rejection(
+    case: &Case,
+    index: usize,
+    expected: &Value,
+    error: &serde_json::Error,
+) -> Result<(), TestError> {
+    let message = error.to_string();
+    let mut core = expected
+        .as_object()
+        .ok_or("expected envelope error fields")?
+        .clone();
+    let details = match case.name.as_str() {
+        "test_validator_1_0" if message.contains("missing field `version`") => {
+            Some(json!([{ "path": format!("messages.{index}.version"), "code": "missing_field" }]))
+        }
+        "test_validator_1_0" if message.contains("expected a string") => Some(json!([{
+            "path": format!("messages.{index}.createSurface.surfaceId"), "code": "type_mismatch"
+        }])),
+        "test_v10_multiple_action_envelope_error" if message.contains("single key") => None,
+        "test_v10_validate_component_metadata_invalid_extension_key_error"
+            if message.contains("com.example.invalid") =>
+        {
+            None
+        }
+        _ => return Err(format!("unexpected validator envelope error: {error}").into()),
+    };
+    if core.remove("details") != details {
+        return Err(format!("expected envelope details {expected}, got {details:?}").into());
+    }
+    assert_rejection(&Value::Object(core), "ValidationError", None, &message)
+}
+
 fn transaction_surface(message: &AgentToRendererMessage) -> Result<&str, TestError> {
     let AgentToRendererMessage::V1(operation) = message;
     match operation {
@@ -633,7 +661,10 @@ fn transaction_surface(message: &AgentToRendererMessage) -> Result<&str, TestErr
 
 fn error_category(error: &ValidationError, expected: &Value, case: &Case) -> &'static str {
     match error {
-        ValidationError::ComponentDepth | ValidationError::FunctionDepth
+        ValidationError::ComponentDepth
+        | ValidationError::FunctionDepth
+        | ValidationError::PayloadDepth
+        | ValidationError::DataModelDepth
             if expected["category"] == "RecursionError" =>
         {
             "RecursionError"
@@ -666,7 +697,9 @@ fn assert_transaction_error(
     let message = error.to_string();
     let category = match error {
         ValidationError::CircularReference(_) if case.action == "validate" => "RecursionError",
-        ValidationError::PayloadDepth | ValidationError::FunctionDepth => "RecursionError",
+        ValidationError::PayloadDepth
+        | ValidationError::FunctionDepth
+        | ValidationError::DataModelDepth => "RecursionError",
         ValidationError::Surface(
             SurfaceError::DuplicateComponent(_)
             | SurfaceError::DuplicateSurface(_)
@@ -681,8 +714,11 @@ fn assert_transaction_error(
         })
         | ValidationError::Catalog(_)
         | ValidationError::InvalidComponentId { .. }
+        | ValidationError::InvalidComponentType { .. }
+        | ValidationError::BindingPath { .. }
         | ValidationError::UnknownComponent { .. }
         | ValidationError::UnknownFunction { .. }
+        | ValidationError::AgentOnlyFunction { .. }
         | ValidationError::InvalidCall(_)
         | ValidationError::UnallowedChild { .. }
         | ValidationError::UnallowedParent { .. } => "ValidationError",
@@ -718,10 +754,7 @@ fn assert_transaction_error(
             return Err(format!("expected renderer error {renderer}, got {actual}").into());
         }
         if let Some(details) = &details {
-            let error = &actual["error"];
-            let observed = json!([{
-                "code": error["code"], "path": error["path"], "surfaceId": error["surfaceId"]
-            }]);
+            let observed = transaction_details(case, &actual["error"], &message)?;
             if &observed != details {
                 return Err(
                     format!("expected validation details {details}, got {observed}").into(),
@@ -741,6 +774,27 @@ fn assert_transaction_error(
         .as_ref()
         .and_then(|actual| actual["error"]["code"].as_str());
     assert_rejection(&Value::Object(core), category, renderer_code, &message)
+}
+
+fn transaction_details(case: &Case, error: &Value, message: &str) -> Result<Value, TestError> {
+    if case.name != "test_custom_catalog_1_0" {
+        return Ok(json!([{
+            "code": error["code"], "path": error["path"], "surfaceId": error["surfaceId"]
+        }]));
+    }
+
+    // The fixture also reports the component-local schema error.
+    let path = error["path"]
+        .as_str()
+        .and_then(|path| path.strip_prefix("/components/0"))
+        .ok_or("missing component-local error path")?;
+    let code = match path {
+        "/chartType" if message.contains("is not one of") => "invalid_value",
+        "/children" if message.contains("is a required property") => "missing_field",
+        "/component" if message.contains("UnknownComponent") => "invalid_value",
+        _ => return Err(format!("unexpected catalog validation error: {message}").into()),
+    };
+    Ok(json!([{ "code": code, "path": path, "surfaceId": error["surfaceId"] }]))
 }
 
 fn catalog_document(case: &Case, document: &Value) -> Result<Value, TestError> {

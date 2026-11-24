@@ -8,7 +8,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::catalog::{Catalog, CatalogError, CatalogRegistry, CatalogView};
-use crate::data_model::DataError;
+use crate::data_model::{self, DataError};
 use crate::expression::{Expression, is_identifier, parse_template};
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
@@ -276,6 +276,19 @@ impl MessageProcessor {
                     config,
                 )?;
             }
+            AgentToRenderer::UpdateDataModel(update) => {
+                validate_nesting(&update.value, false)?;
+                if self.get(&update.surface_id).is_none()
+                    && let Err(source @ DataError::InvalidPointer(_)) =
+                        data_model::parse_pointer(update.path.as_deref().unwrap_or("/"))
+                {
+                    return Err(SurfaceError::Data {
+                        surface_id: update.surface_id.clone(),
+                        source,
+                    }
+                    .into());
+                }
+            }
             _ => {}
         }
         self.store
@@ -371,8 +384,14 @@ impl CatalogView<'_> {
                     path: format!("{base}/id"),
                 });
             }
-            if component.properties.values().any(payload_exceeds_depth) {
-                return Err(ValidationError::PayloadDepth);
+            if !is_identifier(&component.component) {
+                return Err(ValidationError::InvalidComponentType {
+                    name: component.component.clone(),
+                    path: format!("{base}/component"),
+                });
+            }
+            for property in component.properties.values() {
+                validate_nesting(property, true)?;
             }
             let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
             let result = catalog.validate_component_at(component, Some(&base));
@@ -461,11 +480,22 @@ impl CatalogView<'_> {
                         &path,
                     )?;
                 }
-                Value::Object(object) => nodes.extend(
-                    object
-                        .iter()
-                        .map(|(key, value)| (value, path.join(key.as_str()))),
-                ),
+                Value::Object(object) => {
+                    if let Some(binding) = object.get("@path").and_then(Value::as_str) {
+                        let absolute = DataScope::default().resolve_path(binding);
+                        data_model::parse_pointer(&absolute).map_err(|source| {
+                            ValidationError::BindingPath {
+                                path: path.join("@path").to_string(),
+                                source,
+                            }
+                        })?;
+                    }
+                    nodes.extend(
+                        object
+                            .iter()
+                            .map(|(key, value)| (value, path.join(key.as_str()))),
+                    );
+                }
                 Value::Array(items) => nodes.extend(
                     items
                         .iter()
@@ -500,7 +530,10 @@ impl CatalogView<'_> {
                     .or(default_catalog),
             )?;
             if catalog.is_agent_only(&call.name) {
-                return Err(ValidationError::AgentOnlyFunction(call.name.clone()));
+                return Err(ValidationError::AgentOnlyFunction {
+                    name: call.name.clone(),
+                    path: path.to_string(),
+                });
             }
             match catalog.validate_function_at(call, Some(path.as_str())) {
                 Err(CatalogError::UnknownEntry(name)) if !config.allow_unknown_elements => {
@@ -546,21 +579,31 @@ impl CatalogView<'_> {
     }
 }
 
-fn payload_exceeds_depth(value: &Value) -> bool {
-    let mut pending = vec![(value, 0)];
-    while let Some((value, depth)) = pending.pop() {
+fn validate_nesting(value: &Value, expressions: bool) -> Result<(), ValidationError> {
+    let mut pending = vec![(value, 0, 0)];
+    while let Some((value, depth, calls)) = pending.pop() {
         if depth > MAX_PAYLOAD_DEPTH {
-            return true;
+            return Err(if expressions {
+                ValidationError::PayloadDepth
+            } else {
+                ValidationError::DataModelDepth
+            });
         }
         match value {
             Value::Object(object) => {
-                pending.extend(object.values().map(|value| (value, depth + 1)));
+                let calls = calls + usize::from(expressions && object.contains_key("@call"));
+                if calls > MAX_FUNCTION_DEPTH {
+                    return Err(ValidationError::FunctionDepth);
+                }
+                pending.extend(object.values().map(|value| (value, depth + 1, calls)));
             }
-            Value::Array(array) => pending.extend(array.iter().map(|value| (value, depth + 1))),
+            Value::Array(array) => {
+                pending.extend(array.iter().map(|value| (value, depth + 1, calls)));
+            }
             _ => {}
         }
     }
-    false
+    Ok(())
 }
 
 fn legacy_field<T: serde::de::DeserializeOwned>(
@@ -799,10 +842,18 @@ pub enum ValidationError {
     #[error("Catalog not found: {0}")]
     UnknownCatalog(String),
     /// A component ID violates the protocol identifier rules.
-    #[error("Invalid component ID '{id}'")]
+    #[error("Component id '{id}' must be a valid UAX #31 identifier")]
     InvalidComponentId {
         /// The invalid component ID.
         id: String,
+        /// The field in the incoming component batch.
+        path: String,
+    },
+    /// A component type violates the protocol identifier rules.
+    #[error("Component type '{name}' must be a valid UAX #31 identifier")]
+    InvalidComponentType {
+        /// The component type.
+        name: String,
         /// The field in the incoming component batch.
         path: String,
     },
@@ -868,6 +919,18 @@ pub enum ValidationError {
     /// A component property exceeds the nesting limit.
     #[error("Global recursion limit exceeded in component properties")]
     PayloadDepth,
+    /// An update exceeds the data model nesting limit.
+    #[error("Global recursion limit exceeded in data model update")]
+    DataModelDepth,
+    /// A data binding has an invalid path.
+    #[error("{source}")]
+    BindingPath {
+        /// The binding location in the incoming component batch.
+        path: String,
+        /// The data model path error.
+        #[source]
+        source: DataError,
+    },
     /// The catalog does not declare the function.
     #[error("Unrecognized function '{name}'")]
     UnknownFunction {
@@ -883,8 +946,13 @@ pub enum ValidationError {
     #[error("Invalid function call: {0}")]
     InvalidCall(String),
     /// A renderer expression calls a function reserved for the agent.
-    #[error("Function '{0}' is agentOnly")]
-    AgentOnlyFunction(String),
+    #[error("Function '{name}' is agentOnly")]
+    AgentOnlyFunction {
+        /// The function name.
+        name: String,
+        /// The call location in the incoming component batch.
+        path: String,
+    },
     /// The local expression template is invalid.
     #[error(transparent)]
     Expression(#[from] crate::expression::ParseError),
@@ -899,8 +967,11 @@ impl ValidationError {
     pub fn renderer_error(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
         let field = match self {
             Self::InvalidComponentId { path, .. }
+            | Self::InvalidComponentType { path, .. }
             | Self::UnknownComponent { path, .. }
             | Self::UnknownFunction { path, .. }
+            | Self::AgentOnlyFunction { path, .. }
+            | Self::BindingPath { path, .. }
             | Self::Catalog(CatalogError::InvalidPayload {
                 path: Some(path), ..
             }) => Some((
@@ -944,9 +1015,10 @@ impl ValidationError {
                 )
                 | Self::DanglingReference { .. }
                 | Self::Orphan(_) => "INTEGRITY_ERROR",
-                Self::SelfReference(_) | Self::CircularReference(_) | Self::PayloadDepth => {
-                    "RECURSION_LIMIT_EXCEEDED"
-                }
+                Self::SelfReference(_)
+                | Self::CircularReference(_)
+                | Self::PayloadDepth
+                | Self::DataModelDepth => "RECURSION_LIMIT_EXCEEDED",
                 Self::MissingCatalog | Self::UnknownCatalog(_) => "CATALOG_NOT_FOUND",
                 Self::Surface(SurfaceError::Data { .. }) => "DATA_ERROR",
                 _ => return None,

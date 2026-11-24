@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
@@ -38,7 +39,13 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
     if suite == "core/functions.yaml" && case.action == "evaluate_function" {
         if case.protocol_version.as_deref() == Some("1.0")
             && (case.name.starts_with("test_evaluate_function_regex_v10_")
-                || is_formatting_case(&case.name))
+                || is_formatting_case(&case.name)
+                || is_resolved_boolean_case(&case.name)
+                || matches!(
+                    case.name.as_str(),
+                    "test_evaluate_function_v10_catalog_of_other_protocol_version_errors"
+                        | "test_evaluate_function_v10_agent_only_function_errors"
+                ))
         {
             return true;
         }
@@ -66,8 +73,11 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         && case.action == "validate"
         && (suite == "core/index_function.yaml"
             || (suite == "core/functions.yaml"
-                && (case.name == "test_function_invalid_argument_schema_error"
-                    || is_formatting_case(&case.name)))
+                && (matches!(
+                    case.name.as_str(),
+                    "test_function_invalid_argument_schema_error"
+                        | "test_function_logical_and_or_not"
+                ) || is_formatting_case(&case.name)))
             || (suite == "core/expressions.yaml"
                 && matches!(
                     case.name.as_str(),
@@ -111,6 +121,9 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
     let mut processor = MessageProcessor::default();
     processor.add_catalog(Catalog::from_json(catalog, &common)?)?;
     let mut functions = LocalFunctions::default();
+    if case.name == "test_function_logical_and_or_not" {
+        register_validation_functions(&mut functions, "basic");
+    }
     if is_formatting_case(&case.name) {
         register_formatting_functions(
             &mut functions,
@@ -159,7 +172,11 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         }
     }
     if let Some(expected) = &case.expect {
-        assert_components(&processor, &functions, expected)?;
+        if case.name == "test_function_logical_and_or_not" {
+            assert_logical_text(&processor, &functions, expected)?;
+        } else {
+            assert_components(&processor, &functions, expected)?;
+        }
         if suite == "core/index_function.yaml" {
             super::nodes::assert_mounted_indices(processor, expected)?;
         }
@@ -179,7 +196,20 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
         processor.add_catalog(catalog)?;
     }
     for path in &case.catalog_paths {
-        processor.add_catalog(Catalog::from_json(read_json(upstream, path)?, common)?)?;
+        let catalog = Catalog::from_json(read_json(upstream, path)?, common);
+        if case.name == "test_evaluate_function_v10_catalog_of_other_protocol_version_errors"
+            && path == "catalogs/basic/v0_9/catalog.json"
+        {
+            if !matches!(
+                catalog,
+                Err(CatalogError::InvalidCatalog(ref message))
+                    if message.contains("must declare protocolVersion 1.0")
+            ) {
+                return Err("expected catalog loading to reject the v0.9 catalog".into());
+            }
+            continue;
+        }
+        processor.add_catalog(catalog?)?;
     }
     if let Some(default_catalog) = case
         .surface
@@ -191,12 +221,26 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
     if let Some(data) = &case.data_model {
         create["dataModel"] = data.clone();
     }
+    let mut args = case.args.clone().ok_or("missing function arguments")?;
+    if is_resolved_boolean_case(&case.name) {
+        // Standalone fixtures supply resolved operands. Bind them to form valid calls.
+        let data = args.clone();
+        if let Some(values) = args.get_mut("values").and_then(Value::as_array_mut) {
+            for (index, operand) in values.iter_mut().enumerate() {
+                *operand = json!({"@path": format!("/values/{index}")});
+            }
+        } else {
+            args["value"] = json!({"@path": "/value"});
+        }
+        create["dataModel"] = data;
+    }
     let message = json!({"version": "1.0", "createSurface": create});
     processor.apply(serde_json::from_value(message)?)?;
-    let mut call = json!({"@call": case.function, "args": case.args});
+    let mut call = json!({"@call": case.function, "args": args});
     if let Some(id) = &case.catalog_id {
         call["catalogId"] = Value::from(id.clone());
     }
+    let called = Cell::new(false);
     let mut functions = LocalFunctions::default();
     let basic = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json";
     register_validation_functions(&mut functions, basic);
@@ -207,13 +251,25 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
             FormattingOptions::new("en-US", "UTC")?,
         );
     }
+    if case.name == "test_evaluate_function_v10_agent_only_function_errors" {
+        let id = create["catalogId"].as_str().ok_or("missing catalog ID")?;
+        let name = call["@call"].as_str().ok_or("missing function name")?;
+        functions.insert(id, name, |_| {
+            called.set(true);
+            Ok(Value::Null)
+        });
+    }
     let actual = processor.resolve_value("main", &DataScope::default(), &call, &functions);
+    if called.get() {
+        return Err("the renderer invoked an agent-only function".into());
+    }
     match (actual, &case.expect, &case.expect_error) {
         (Ok(actual), Some(expected), None) if actual == *expected => Ok(()),
         (Err(error), None, Some(expected)) => {
             let category = match error {
                 ResolveError::UnknownCatalog(_) | ResolveError::MissingCatalog => "CatalogError",
                 ResolveError::Catalog(CatalogError::UnknownEntry(_))
+                | ResolveError::AgentOnly(_)
                 | ResolveError::IndexScope
                 | ResolveError::LocalFunction(_) => "ExpressionError",
                 _ => return Err(error.into()),
@@ -222,6 +278,46 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
         }
         (actual, _, _) => Err(format!("unexpected function result {actual:?}").into()),
     }
+}
+
+fn is_resolved_boolean_case(name: &str) -> bool {
+    matches!(
+        name,
+        "test_evaluate_function_and_validation_result_operands"
+            | "test_evaluate_function_or_validation_result_operands"
+            | "test_evaluate_function_not_validation_result_operand"
+    )
+}
+
+fn assert_logical_text(
+    processor: &MessageProcessor,
+    functions: &LocalFunctions<'_>,
+    expected: &Value,
+) -> Result<(), TestError> {
+    let mut rendered = expected.clone();
+    let fields = rendered["surfaces"]["main"]["components"]
+        .as_object_mut()
+        .ok_or("missing logical component expectations")?;
+    let surface = processor.get("main").ok_or("missing logical surface")?;
+    for (id, expected) in fields {
+        let component = surface
+            .components()
+            .iter()
+            .find(|component| component.id == *id)
+            .ok_or("missing logical component")?;
+        let call = component
+            .properties
+            .get("text")
+            .ok_or("missing logical expression")?;
+        let boolean = &expected["text"];
+        let actual = processor.resolve_value("main", &DataScope::default(), call, functions)?;
+        if &actual != boolean || !boolean.is_boolean() {
+            return Err(format!("expected {id} to return {boolean}, got {actual}").into());
+        }
+        // A Text property converts the evaluated boolean to its string form.
+        expected["text"] = Value::String(boolean.to_string());
+    }
+    assert_components(processor, functions, &rendered)
 }
 
 fn execute_parser(case: &Case) -> Result<(), TestError> {

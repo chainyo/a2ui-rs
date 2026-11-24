@@ -687,7 +687,7 @@ pub enum ResolveError {
     #[error("Function and argument names must be valid UAX #31 identifiers: '{0}'")]
     InvalidFunction(String),
     /// The function can only run when the agent calls it.
-    #[error("Function '{0}' is agentOnly")]
+    #[error("Function '{0}' cannot be called by renderer (agentOnly)")]
     AgentOnly(String),
     /// The function needs a user action.
     #[error("Function '{0}' requires user activation")]

@@ -41,7 +41,7 @@ impl DataModel {
     ///
     /// Returns an error for a relative path, an invalid escape, or a forbidden key.
     pub fn get(&self, path: &str) -> Result<Option<&Value>, DataError> {
-        let segments = parse(path)?;
+        let segments = parse_pointer(path)?;
         let mut current = &self.root;
         for segment in &segments {
             let next = match current {
@@ -65,7 +65,7 @@ impl DataModel {
     /// Returns an error for an invalid path or a write through an incompatible value.
     /// An error leaves the data model unchanged.
     pub fn set(&mut self, path: &str, value: Value) -> Result<(), DataError> {
-        let segments = parse(path)?;
+        let segments = parse_pointer(path)?;
         if segments.is_empty() {
             self.root = if value.is_null() {
                 Value::Object(Map::new())
@@ -85,7 +85,7 @@ impl DataModel {
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum DataError {
     /// The path is relative or contains an invalid escape.
-    #[error("Invalid JSON Pointer '{0}'")]
+    #[error("Invalid path syntax in JSON Pointer '{0}'")]
     InvalidPointer(String),
     /// The path contains a forbidden key.
     #[error("Forbidden path segment in '{0}'")]
@@ -101,7 +101,7 @@ pub enum DataError {
     ScalarParent(String),
 }
 
-fn parse(path: &str) -> Result<Vec<String>, DataError> {
+pub(crate) fn parse_pointer(path: &str) -> Result<Vec<String>, DataError> {
     if !path.is_empty() && !path.starts_with('/') {
         return Err(DataError::InvalidPointer(path.to_owned()));
     }
