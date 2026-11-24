@@ -16,7 +16,7 @@ use crate::data_model::DataModel;
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, CallAgentFunction, CallRendererFunction, ErrorTarget,
     FunctionCall, FunctionError, FunctionResponse, GenericError, RendererError, RendererToAgent,
-    RendererToAgentMessage,
+    RendererToAgentMessage, ValidationCode, ValidationError as ProtocolValidationError,
 };
 use crate::resolution::{DataScope, LocalFunctions, ResolveError, Resolver, validate_call_shape};
 use crate::validation::{MessageProcessor, ValidationError};
@@ -96,6 +96,8 @@ impl RpcHandler {
     }
 
     /// Validates a JSON message and processes it.
+    ///
+    /// Use [`ReceiveError::renderer_error`] to report supported envelope errors.
     ///
     /// # Errors
     /// Returns an error if the envelope is invalid or the processor rejects the message.
@@ -584,6 +586,9 @@ pub enum ReceiveError {
         /// The call ID of the invalid renderer call, if available.
         function_call_id: Option<String>,
     },
+    /// A `deleteSurface` envelope omits its surface ID.
+    #[error("Missing deleteSurface.surfaceId")]
+    MissingDeleteSurfaceId,
     /// The surface operation failed.
     #[error(transparent)]
     Validation(#[from] ValidationError),
@@ -600,39 +605,54 @@ impl ReceiveError {
     pub fn renderer_error_for_surface(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
         match self {
             Self::Validation(error) => error.renderer_error(surface_id),
-            Self::Envelope { .. } | Self::Disposed => None,
+            Self::Envelope { .. } | Self::MissingDeleteSurfaceId | Self::Disposed => None,
         }
     }
 
-    /// Returns a correlated renderer error for an invalid RPC envelope.
+    /// Builds a renderer error for a supported invalid envelope.
+    ///
+    /// A missing `deleteSurface.surfaceId` uses an empty surface ID.
+    /// An invalid renderer call uses its function call ID.
     #[must_use]
     pub fn renderer_error(&self) -> Option<RendererToAgentMessage> {
-        let Self::Envelope {
-            message,
-            function_call_id: Some(id),
-        } = self
-        else {
-            return None;
-        };
-        Some(RendererToAgentMessage::V1(RendererToAgent::Error(
-            RendererError::Generic(GenericError {
+        let error = match self {
+            Self::MissingDeleteSurfaceId => RendererError::Validation(ProtocolValidationError {
+                code: ValidationCode::ValidationFailed,
+                message: self.to_string(),
+                surface_id: String::new(),
+                path: "/surfaceId".to_owned(),
+            }),
+            Self::Envelope {
+                message,
+                function_call_id: Some(id),
+            } => RendererError::Generic(GenericError {
                 code: "INVALID_FUNCTION_CALL".to_owned(),
                 message: message.clone(),
                 target: ErrorTarget::FunctionCallId(id.clone()),
                 extra: BTreeMap::new(),
             }),
-        )))
+            _ => return None,
+        };
+        Some(RendererToAgentMessage::V1(RendererToAgent::Error(error)))
     }
 }
 
 fn invalid_envelope(input: &Value, error: &serde_json::Error) -> ReceiveError {
+    let is_v1_operation =
+        input["version"] == "1.0" && input.as_object().is_some_and(|object| object.len() == 2);
+    if is_v1_operation
+        && input["deleteSurface"]
+            .as_object()
+            .is_some_and(|delete| !delete.contains_key("surfaceId"))
+    {
+        return ReceiveError::MissingDeleteSurfaceId;
+    }
     let request = &input["callRendererFunction"];
     let call = &request["callFunction"];
-    let function_call_id = (input["version"] == "1.0"
-        && input.as_object().is_some_and(|object| object.len() == 2))
-    .then(|| request["functionCallId"].as_str())
-    .flatten()
-    .map(str::to_owned);
+    let function_call_id = is_v1_operation
+        .then(|| request["functionCallId"].as_str())
+        .flatten()
+        .map(str::to_owned);
     let message = if function_call_id.is_some() && !call.is_object() {
         "Invalid or missing callFunction".to_owned()
     } else if function_call_id.is_some() && !call["catalogId"].is_string() {

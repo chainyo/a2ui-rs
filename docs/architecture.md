@@ -133,7 +133,8 @@ Calls in a `formatString` template use its catalog. The system function `@index`
 Create one `RpcHandler` for each transport session.
 Send incoming messages through `RpcHandler::receive` or `RpcHandler::receive_json`.
 Send each returned renderer message on the transport.
-Use `ReceiveError::renderer_error` to get a correlated error for an invalid RPC envelope.
+Use `ReceiveError::renderer_error` to report malformed renderer calls and a missing `deleteSurface.surfaceId`.
+The missing surface ID gives `VALIDATION_FAILED` at `/surfaceId`. Its envelope has an empty surface ID.
 Use `ReceiveError::renderer_error_for_surface` to report supported surface validation errors.
 
 Use `RpcHandler::call_agent_function` for a renderer-initiated call.

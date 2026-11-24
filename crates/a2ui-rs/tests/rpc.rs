@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use a2ui_rs::catalog::Catalog;
 use a2ui_rs::protocol::{AgentToRendererMessage, CallAgentFunction, RendererToAgentMessage};
 use a2ui_rs::resolution::LocalFunctions;
-use a2ui_rs::rpc::{CallOptions, RpcError, RpcHandler};
+use a2ui_rs::rpc::{CallOptions, ReceiveError, RpcError, RpcHandler};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -51,6 +51,38 @@ fn setup(now: Instant) -> Result<(RpcHandler, Fixture), Box<dyn Error>> {
         );
     }
     Ok((handler, fixture))
+}
+
+#[test]
+fn malformed_deletions_do_not_change_active_surfaces() -> Result<(), Box<dyn Error>> {
+    let now = Instant::now();
+    let (mut handler, _) = setup(now)?;
+    let functions = LocalFunctions::default();
+    for (input, missing_id) in [
+        (json!({"version": "1.0", "deleteSurface": {}}), true),
+        (
+            json!({"version": "1.0", "deleteSurface": {"surfaceId": null}}),
+            false,
+        ),
+        (json!({"version": "v0.9", "deleteSurface": {}}), false),
+        (
+            json!({"version": "1.0", "deleteSurface": {}, "createSurface": {"surfaceId": "extra"}}),
+            false,
+        ),
+    ] {
+        let Err(error) = handler.receive_json(&input, now, &functions) else {
+            return Err("expected malformed deletion to be rejected".into());
+        };
+        assert_eq!(
+            matches!(error, ReceiveError::MissingDeleteSurfaceId),
+            missing_id
+        );
+        assert_eq!(error.renderer_error().is_some(), missing_id);
+        assert!(handler.processor().get("warehouse-north").is_some());
+        assert!(handler.processor().get("warehouse-south").is_some());
+        assert!(handler.processor().get("extra").is_none());
+    }
+    Ok(())
 }
 
 #[test]
