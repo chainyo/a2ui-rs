@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use a2ui_rs::catalog::Catalog;
+use a2ui_rs::protocol::{RendererToAgent, RendererToAgentMessage};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
-use a2ui_rs::routing::{MountedNode, NodeChangeKind, NodeId, NodeTree, RoutingSession};
+use a2ui_rs::routing::{
+    ActionDispatchOptions, EvaluationState, MountedNode, NodeChangeKind, NodeId, NodeTree,
+    RoutingSession,
+};
 use a2ui_rs::rpc::RpcHandler;
 use a2ui_rs::validation::MessageProcessor;
 use serde::Deserialize;
@@ -34,13 +38,16 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
             "inline_create_applies_data_before_components"
                 | "separate_data_message_keeps_arrival_order"
                 | "direct_data_binding_and_function_call_schemas"
+                | "event_property_is_not_an_action"
+                | "invoke_action_with_dispatch_metadata"
         )
 }
 
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let path = case.fixture.as_ref().ok_or("missing node fixture")?;
     let conformance = upstream.join("conformance");
-    let fixture: Fixture = serde_saphyr::from_str(&fs::read_to_string(conformance.join(path))?)?;
+    let mut fixture: Fixture =
+        serde_saphyr::from_str(&fs::read_to_string(conformance.join(path))?)?;
     if !fixture.surface && (fixture.data != json!({}) || !fixture.components.is_empty()) {
         return Err("expected a fixture with no initial surface".into());
     }
@@ -55,6 +62,14 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     session.mount_tree("s");
     let now = Instant::now();
     if fixture.surface {
+        for component in &mut fixture.components {
+            let object = component
+                .as_object_mut()
+                .ok_or("invalid component definition")?;
+            if let Some(metadata) = object.remove("metadata") {
+                object.insert("@metadata".to_owned(), metadata);
+            }
+        }
         session.receive(
             serde_json::from_value(json!({
                 "version": "1.0", "createSurface": {
@@ -140,27 +155,33 @@ fn scoped_step(
     step: &Value,
 ) -> Result<(), TestError> {
     let before = node_ids(session)?;
-    let value = step.get("value").ok_or("missing value")?.clone();
-    match step["op"].as_str() {
-        Some("write") => {
-            let node = step["node"].as_str().ok_or("missing node path")?;
-            let property = step["property"].as_str().ok_or("missing property")?;
-            session.write_node_property(
-                "s",
-                *before.get(node).ok_or("unknown node")?,
-                property,
-                value,
-            )?;
-        }
-        Some("set_data") => {
-            let path = step["path"].as_str().ok_or("missing data path")?;
-            session.write_binding("s", &DataScope::default(), path, value)?;
-        }
-        _ => return Err("unsupported node fixture operation".into()),
+    let invocation = apply_scoped_step(session, &before, step)?;
+    let mut events = Vec::new();
+    let update = session.advance(
+        now,
+        Some(&mut |message| {
+            let RendererToAgentMessage::V1(RendererToAgent::Action(action)) = message else {
+                return Err("expected an action event".to_owned());
+            };
+            let mut observed = json!({
+                "name": action.name,
+                "source_component_id": action.source_component_id,
+                "context": action.context,
+            });
+            if let Some(metadata) = action.metadata {
+                observed["metadata"] = json!(metadata);
+            }
+            events.push(observed);
+            Ok(())
+        }),
+    );
+    if invocation.is_some_and(|id| !matches!(session.status(id), Some(EvaluationState::Ready(_)))) {
+        return Err(format!("action did not complete: {:?}", update.errors).into());
     }
-
-    let update = session.advance(now, None);
     let expected = &step["expect"];
+    if expected["events"].as_array().map_or(&[][..], Vec::as_slice) != events {
+        return Err(format!("unexpected emitted events: {events:?}").into());
+    }
     assert_nodes(session, &expected["nodes"])?;
     assert_data(session, expected)?;
     let after = node_ids(session)?;
@@ -194,6 +215,44 @@ fn scoped_step(
         .into());
     }
     Ok(())
+}
+
+fn apply_scoped_step(
+    session: &mut RoutingSession<'_>,
+    before: &BTreeMap<String, NodeId>,
+    step: &Value,
+) -> Result<Option<a2ui_rs::routing::EvaluationId>, TestError> {
+    match step["op"].as_str() {
+        Some("write" | "invoke") => {
+            let node = step["node"].as_str().ok_or("missing node path")?;
+            let property = step["property"].as_str().ok_or("missing property")?;
+            let id = *before.get(node).ok_or("unknown node")?;
+            if step["op"] == "invoke" {
+                let metadata = step
+                    .get("metadata")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?;
+                let options = ActionDispatchOptions {
+                    timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                    user_activated: true,
+                    metadata,
+                };
+                return Ok(Some(
+                    session.dispatch_node_action("s", id, property, options)?,
+                ));
+            }
+            let value = step.get("value").ok_or("missing value")?.clone();
+            session.write_node_property("s", id, property, value)?;
+        }
+        Some("set_data") => {
+            let path = step["path"].as_str().ok_or("missing data path")?;
+            let value = step.get("value").ok_or("missing value")?.clone();
+            session.write_binding("s", &DataScope::default(), path, value)?;
+        }
+        _ => return Err("unsupported node fixture operation".into()),
+    }
+    Ok(None)
 }
 
 fn assert_data(session: &RoutingSession<'_>, expected: &Value) -> Result<(), TestError> {
@@ -245,7 +304,7 @@ fn assert_nodes(session: &RoutingSession<'_>, expected: &Value) -> Result<(), Te
             }
         }
         for (name, expected) in expected["props"].as_object().into_iter().flatten() {
-            let actual = observed_property(node, path, name)?;
+            let actual = observed_property(node, path, name, expected)?;
             if &actual != expected {
                 return Err(format!("unexpected {name} at {path}: {actual}").into());
             }
@@ -254,7 +313,15 @@ fn assert_nodes(session: &RoutingSession<'_>, expected: &Value) -> Result<(), Te
     Ok(())
 }
 
-fn observed_property(node: &MountedNode, path: &str, name: &str) -> Result<Value, TestError> {
+fn observed_property(
+    node: &MountedNode,
+    path: &str,
+    name: &str,
+    expected: &Value,
+) -> Result<Value, TestError> {
+    if let Some(child) = node.children.iter().find(|child| child.field == name) {
+        return Ok(json!({"node": child_path(path, &child.field)}));
+    }
     let children: Vec<_> = node
         .children
         .iter()
@@ -270,7 +337,14 @@ fn observed_property(node: &MountedNode, path: &str, name: &str) -> Result<Value
         return Ok(Value::Array(children));
     }
     let property = node.properties.get(name).ok_or("missing property")?;
-    Ok(json!({"value": property.value, "writable": property.binding_path.is_some()}))
+    if property.is_action {
+        return Ok(json!({"action": true}));
+    }
+    if expected.get("writable").is_some() {
+        Ok(json!({"value": property.value, "writable": property.binding_path.is_some()}))
+    } else {
+        Ok(property.value.clone())
+    }
 }
 
 fn node_ids(session: &RoutingSession<'_>) -> Result<BTreeMap<String, NodeId>, TestError> {

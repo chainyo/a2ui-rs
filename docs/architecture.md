@@ -166,6 +166,12 @@ An update reports each changed node once.
 Removing a node also removes its descendants and their property evaluations.
 Use `unmount_tree` to stop tracking a surface.
 
+Use `MountedProperty::is_action` to find action properties.
+Call `dispatch_node_action` with the node ID and property name.
+The session resolves arguments in the node's scope when it runs the action.
+Set the timestamp and optional metadata in `ActionDispatchOptions` for an event.
+Function actions use the function routing path.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.
