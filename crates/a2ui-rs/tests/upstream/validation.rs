@@ -9,31 +9,22 @@ use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
 
-pub(super) fn pending_transaction_error(suite: &str, case: &Case) -> bool {
+fn supports_transaction(suite: &str, case: &Case) -> bool {
     suite == super::SURFACE_SUITE
+        && case.action == "process_messages"
         && case.protocol_version.as_deref() == Some("1.0")
         && matches!(
             case.name.as_str(),
             "test_batch_duplicate_component_ids_in_same_message_error"
                 | "test_batch_atomic_rollback_on_candidate_topology_cycle"
+                | "test_permissive_mode_allows_orphan_components"
+                | "test_permissive_mode_allows_dangling_references"
+                | "test_v10_call_validation_config_relaxes_strict_processor"
+                | "test_v10_call_validation_config_tightens_permissive_processor"
+                | "test_v10_call_validation_config_leaves_out_rules_as_strict"
+                | "test_composition_constraints_preserved_on_partial_parent_update"
+                | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
         )
-}
-
-fn supports_transaction(suite: &str, case: &Case) -> bool {
-    suite == super::SURFACE_SUITE
-        && case.action == "process_messages"
-        && case.protocol_version.as_deref() == Some("1.0")
-        && (pending_transaction_error(suite, case)
-            || matches!(
-                case.name.as_str(),
-                "test_permissive_mode_allows_orphan_components"
-                    | "test_permissive_mode_allows_dangling_references"
-                    | "test_v10_call_validation_config_relaxes_strict_processor"
-                    | "test_v10_call_validation_config_tightens_permissive_processor"
-                    | "test_v10_call_validation_config_leaves_out_rules_as_strict"
-                    | "test_composition_constraints_preserved_on_partial_parent_update"
-                    | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
-            ))
 }
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
@@ -300,17 +291,26 @@ fn assert_transaction_error(
         ValidationError::DanglingReference { .. } => "ValidationError",
         _ => return Err(format!("unexpected transaction failure: {error}").into()),
     };
-    if let Some(renderer) = renderer {
-        let renderer_message = renderer["error"]["message"]
+    if let Some(mut renderer) = renderer {
+        let expected_message = renderer["error"]["message"]
             .as_str()
             .ok_or("missing renderer error message")?;
-        if renderer["version"] != "1.0"
-            || renderer["error"]["surfaceId"] != surface
-            || !message.contains(renderer_message)
-        {
-            return Err(
-                format!("unexpected renderer fixture expectation {renderer}: {message}").into(),
-            );
+        let outbound = error
+            .renderer_error(surface)
+            .ok_or("missing renderer error envelope")?;
+        let actual = serde_json::to_value(outbound)?;
+        let actual_message = actual["error"]["message"]
+            .as_str()
+            .ok_or("missing error message")?;
+        if !actual_message.contains(expected_message) {
+            return Err(format!(
+                "expected renderer error message containing {expected_message}, got {actual}"
+            )
+            .into());
+        }
+        renderer["error"]["message"] = json!(actual_message);
+        if actual != renderer {
+            return Err(format!("expected renderer error {renderer}, got {actual}").into());
         }
     }
     assert_rejection(&Value::Object(core), category, None, &message)

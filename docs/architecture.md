@@ -67,6 +67,11 @@ Use `ValidationConfig` to permit incomplete graphs during streaming.
 Use `apply_with_config` to set the rules for one message.
 Omitted rules use strict validation. The next call to `apply` uses the processor's rules.
 
+Use `ValidationError::renderer_error` to report duplicate component IDs and component cycles to the agent.
+Supply the surface ID from the rejected message.
+Duplicate component IDs give `INTEGRITY_ERROR`.
+Component cycles give `RECURSION_LIMIT_EXCEEDED`.
+
 ## Data model
 
 Each surface has one `DataModel`. The store uses the object from `createSurface` as its initial data.
@@ -122,6 +127,7 @@ Create one `RpcHandler` for each transport session.
 Send incoming messages through `RpcHandler::receive` or `RpcHandler::receive_json`.
 Send each returned renderer message on the transport.
 Use `ReceiveError::renderer_error` to get a correlated error for an invalid RPC envelope.
+Use `ReceiveError::renderer_error_for_surface` for duplicate component IDs and cycles in surface messages.
 
 Use `RpcHandler::call_agent_function` for a renderer-initiated call.
 Supply a function call ID that the session has never used.

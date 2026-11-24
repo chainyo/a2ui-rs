@@ -104,8 +104,8 @@ Action cases compare the surface data and the correlated renderer error.
 
 The processor cases check permissive streaming and validation rules for one message.
 The harness compares the surface before and after a rejected update.
-The duplicate-ID and cycle fixtures also require a renderer error envelope.
-The harness verifies rejection and rollback. It keeps the renderer error assertions pending.
+The duplicate-ID and cycle fixtures check rejection, rollback, and the renderer error envelope.
+The harness checks the error code, message, and surface ID.
 
 ## Event actions
 

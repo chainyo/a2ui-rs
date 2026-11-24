@@ -246,9 +246,7 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
-    if validation::pending_transaction_error(suite, case) {
-        Some("Core rejection and rollback passed. The renderer error envelope remains pending.")
-    } else if events::missing_event_name(suite, case) {
+    if events::missing_event_name(suite, case) {
         Some(
             "Catalog validation rejects the missing name. The fixture expects INVALID_ACTION at dispatch.",
         )
