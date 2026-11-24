@@ -149,6 +149,19 @@ The session applies a successful function's writes before it runs the next step.
 If a function fails, the action stops. The session keeps the writes from earlier successful functions.
 Event context entries resolve in order. An error stops the event before dispatch.
 
+## Reactive node trees
+
+Call `RoutingSession::mount_tree` to track a surface.
+Call `advance` after each message to publish node changes in message order.
+Read the current root and nodes with `node_tree`.
+Each node gives the IDs and field paths of its explicit children.
+
+A node keeps its ID across property changes and explicit sibling reordering.
+Use the property binding path to write data with `write_binding`.
+An update reports each changed node once.
+Removing a node also removes its descendants and their property evaluations.
+Use `unmount_tree` to stop tracking a surface.
+
 ## Public API checks
 
 Integration tests exercise the public crate during local validation and package-release validation.

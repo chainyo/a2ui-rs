@@ -17,9 +17,14 @@ use crate::rpc::{Outbound, PendingCall, ReceiveError, RpcHandler};
 
 mod check;
 mod evaluation;
+mod tree;
 
 pub use check::{ValidationResult, ValidationSeverity};
 use evaluation::Tick;
+use tree::MountedTrees;
+pub use tree::{
+    MountedChild, MountedNode, MountedProperty, NodeChange, NodeChangeKind, NodeId, NodeTree,
+};
 
 const CACHE_LIMIT: usize = 256;
 
@@ -102,6 +107,8 @@ pub struct RoutingUpdate {
     pub changed: Vec<EvaluationId>,
     /// Renderer errors to send to the agent.
     pub errors: Vec<RendererToAgentMessage>,
+    /// The changes to mounted node trees.
+    pub nodes: Vec<NodeChange>,
 }
 
 /// One renderer session with agent routing for mounted expressions.
@@ -110,6 +117,7 @@ pub struct RoutingSession<'f> {
     functions: LocalFunctions<'f>,
     state: RouterState,
     evaluations: BTreeMap<EvaluationId, Evaluation>,
+    trees: MountedTrees,
     next_id: u64,
     timeout: Option<Duration>,
 }
@@ -123,6 +131,7 @@ impl<'f> RoutingSession<'f> {
             functions,
             state: RouterState::default(),
             evaluations: BTreeMap::new(),
+            trees: MountedTrees::default(),
             next_id: 0,
             timeout: None,
         }
@@ -147,7 +156,7 @@ impl<'f> RoutingSession<'f> {
         self.rpc.add_catalog(catalog)
     }
 
-    /// Applies an incoming message. Call `advance` to publish changes to expressions.
+    /// Applies an incoming message. Call `advance` to publish expression and node changes.
     ///
     /// # Errors
     /// Returns an error if the handler rejects the message.
@@ -165,10 +174,19 @@ impl<'f> RoutingSession<'f> {
             AgentToRenderer::UpdateDataModel(update) => Some(update.surface_id.clone()),
             _ => None,
         };
+        let layout = match operation {
+            AgentToRenderer::CreateSurface(create) => Some(create.surface_id.clone()),
+            AgentToRenderer::UpdateComponents(update) => Some(update.surface_id.clone()),
+            _ => None,
+        };
         let response = self.rpc.receive(message, now, &self.functions)?;
         if let Some(surface) = deleted {
             self.state.surfaces.remove(&surface);
             self.evaluations.retain(|_, entry| entry.surface != surface);
+            self.trees.clear_surface(&surface);
+        }
+        if let Some(surface) = layout {
+            self.trees.mark_dirty(surface);
         }
         if let Some(surface) = modified {
             self.state.bump(&surface);
@@ -218,6 +236,7 @@ impl<'f> RoutingSession<'f> {
             Task::Property {
                 component: component.to_owned(),
                 property: property.to_owned(),
+                internal: false,
             },
         )
     }
@@ -369,17 +388,21 @@ impl<'f> RoutingSession<'f> {
         }
     }
 
-    /// Closes the session and removes its evaluations and caches.
+    /// Closes the session and removes its evaluations, nodes, and caches.
+    ///
+    /// The next `advance` reports node disposal.
     pub fn dispose(&mut self) {
         self.rpc.dispose();
         self.evaluations.clear();
         self.state.surfaces.clear();
+        self.trees.clear();
     }
 
     /// Resolves mounted expressions, sends new requests, and returns state changes.
     ///
     /// Call after input changes, incoming responses, or a pending deadline.
     pub fn advance(&mut self, now: Instant, outbound: Option<&mut Outbound<'_>>) -> RoutingUpdate {
+        self.reconcile_trees();
         self.rpc.expire(now);
         let mut tick = Tick {
             rpc: &mut self.rpc,
@@ -407,7 +430,9 @@ impl<'f> RoutingSession<'f> {
                 let previous_check = evaluation.validation_result.take();
                 let (outcome, diagnostics) = tick.evaluate(evaluation);
                 let outcome_changed = !evaluation.reported || previous != outcome;
-                if outcome_changed || previous_check != evaluation.validation_result {
+                if (outcome_changed || previous_check != evaluation.validation_result)
+                    && !matches!(evaluation.task, Task::Property { internal: true, .. })
+                {
                     update.changed.push(id);
                 }
                 if outcome_changed
@@ -433,6 +458,7 @@ impl<'f> RoutingSession<'f> {
             .surfaces
             .values_mut()
             .for_each(|surface| surface.shared.retain(|_, call| call.strong_count() > 0));
+        update.nodes = self.trees.publish(&self.evaluations);
         update
     }
 }
@@ -442,6 +468,7 @@ enum Task {
     Property {
         component: String,
         property: String,
+        internal: bool,
     },
     Check(Value),
     CheckRule {

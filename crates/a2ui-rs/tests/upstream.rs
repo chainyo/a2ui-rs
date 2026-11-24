@@ -16,6 +16,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "upstream/nodes.rs"]
+mod nodes;
 #[path = "upstream/resolution.rs"]
 mod resolution;
 #[path = "upstream/routing.rs"]
@@ -34,6 +36,7 @@ struct Case {
     protocol_version: Option<String>,
     #[serde(default)]
     action: String,
+    fixture: Option<PathBuf>,
     definition: Option<String>,
     catalog: Option<Value>,
     #[serde(rename = "catalogId")]
@@ -225,7 +228,8 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn supports_case(suite: &str, case: &Case) -> bool {
-    if validation::supports(suite, case)
+    if nodes::supports(suite, case)
+        || validation::supports(suite, case)
         || resolution::supports(suite, case)
         || rpc::supports(suite, case)
         || routing::supports(suite, case)
@@ -272,7 +276,9 @@ fn supports_case(suite: &str, case: &Case) -> bool {
 }
 
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
-    if validation::supports(suite, case) {
+    if nodes::supports(suite, case) {
+        nodes::execute(upstream, case)
+    } else if validation::supports(suite, case) {
         validation::execute(upstream, case)
     } else if resolution::supports(suite, case) {
         resolution::execute(upstream, case)

@@ -1,0 +1,47 @@
+[
+  {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "shipment",
+      "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+      "dataModel": {"destination": "London"},
+      "components": [
+        {"id": "root", "component": "Column", "children": ["destination", "delivery"]},
+        {"id": "destination", "component": "Text", "text": {"@path": "/destination"}},
+        {"id": "delivery", "component": "Text", "text": "Standard delivery"}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "shipment",
+      "components": [
+        {"id": "root", "component": "Column", "children": ["delivery", "destination"]},
+        {"id": "delivery", "component": "Text", "text": "Express delivery"}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "shipment",
+      "components": [
+        {"id": "root", "component": "Column", "children": ["destination"]}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "updateComponents": {
+      "surfaceId": "shipment",
+      "components": [
+        {"id": "root", "component": "Column", "children": ["delivery", "destination"]}
+      ]
+    }
+  },
+  {
+    "version": "1.0",
+    "deleteSurface": {"surfaceId": "shipment"}
+  }
+]

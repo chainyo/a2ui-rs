@@ -133,6 +133,7 @@ impl Tick<'_, '_, '_> {
             Task::Property {
                 component,
                 property,
+                ..
             } => self.property(&mut context, component, property),
         };
         let outcome = match result {
@@ -161,12 +162,7 @@ impl Tick<'_, '_, '_> {
     }
 
     fn component(&self, surface: &str, id: &str) -> Option<&crate::protocol::Component> {
-        self.rpc.processor().get(surface).and_then(|surface| {
-            surface
-                .components()
-                .iter()
-                .find(|component| component.id == id)
-        })
+        self.rpc.processor().get(surface)?.component(id)
     }
 
     fn check_rule(
