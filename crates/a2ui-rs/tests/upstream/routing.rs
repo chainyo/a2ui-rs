@@ -20,6 +20,7 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
     ui::supports(suite, case)
         || ui::supports_check_metadata(suite, case)
         || ui::supports_local_action(suite, case)
+        || ui::supports_open_url(suite, case)
         || (suite == "core/agent_function_routing.yaml"
             && case.action == "route_agent_function"
             && case.protocol_version.as_deref() == Some("1.0")
@@ -34,6 +35,9 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         return ui::execute_check_metadata(upstream, case);
     }
     if case.action == "dispatch_action" {
+        if ui::supports_open_url("core/actions.yaml", case) {
+            return ui::execute_open_url(upstream, case);
+        }
         return ui::execute_local_action(upstream, case);
     }
     let mut session = build_session(upstream, case)?;

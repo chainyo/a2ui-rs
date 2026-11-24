@@ -1,6 +1,7 @@
 //! Local functions for the A2UI v1.0 Basic Catalog.
 
 use serde_json::{Value, json};
+use url::Url;
 
 use crate::protocol::JsonObject;
 use crate::resolution::{LocalFunctions, to_boolean};
@@ -9,6 +10,30 @@ mod formatting;
 mod regex;
 
 pub use formatting::{FormattingOptions, FormattingOptionsError, register_formatting_functions};
+
+/// Registers the `openUrl` action for a loaded v1.0 Basic Catalog.
+///
+/// The callback receives a parsed, absolute HTTP, HTTPS, mailto, or tel URL.
+/// Call `RoutingSession::advance` during the user gesture to run the callback.
+/// Return an error from the callback if the host cannot open the URL.
+pub fn register_open_url<'a>(
+    functions: &mut LocalFunctions<'a>,
+    catalog_id: &str,
+    open: impl Fn(&str) -> Result<(), String> + 'a,
+) {
+    functions.insert_action(catalog_id, "openUrl", move |args, _| {
+        let input = args
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or("openUrl requires a URL")?;
+        let url = Url::parse(input).map_err(|error| format!("Invalid openUrl URL: {error}"))?;
+        if !matches!(url.scheme(), "http" | "https" | "mailto" | "tel") {
+            return Err("openUrl does not allow this URL scheme".into());
+        }
+        open(url.as_str())?;
+        Ok(Value::Null)
+    });
+}
 
 /// Registers the Basic Catalog validators and boolean functions.
 ///
