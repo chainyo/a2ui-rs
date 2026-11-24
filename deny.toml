@@ -10,12 +10,16 @@ ignore = []
 version = 2
 allow = ["Apache-2.0", "MIT", "Unicode-3.0", "BSD-3-Clause"]
 confidence-threshold = 0.8
-exceptions = [{ allow = ["MIT-0"], crate = "borrow-or-share@0.2.4" }]
+exceptions = [
+  { allow = ["MIT-0"], crate = "borrow-or-share@0.2.4" },
+  { allow = ["Zlib"], crate = "foldhash@0.2.0" },
+]
 
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
+skip = [{ crate = "syn@2.0.119", reason = "strum_macros uses syn 2. Other SDK dependencies use syn 3." }]
 
 [sources]
 unknown-registry = "deny"

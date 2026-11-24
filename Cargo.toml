@@ -11,7 +11,6 @@ repository = "https://github.com/chainyo/a2ui-rs"
 
 [workspace.dependencies]
 a2ui-rs = { path = "crates/a2ui-rs" }
-boon = { version = "0.6.1", default-features = false }
 fancy-regex = { version = "0.20.2", default-features = false, features = ["std"] }
 fixed_decimal = { version = "0.7", features = ["ryu"] }
 icu_calendar = { version = "2.4", default-features = false }
@@ -22,6 +21,7 @@ icu_locale_core = "2.4"
 icu_plurals = "2.4"
 icu_provider = "2.4"
 jiff = { version = "0.2.38", default-features = false, features = ["std", "tzdb-bundle-always"] }
+jsonschema = { version = "0.63.1", default-features = false, features = ["idna"] }
 percent-encoding = "2.3.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

@@ -1,11 +1,10 @@
 //! Offline A2UI v1.0 catalog validation.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
-
-use boon::{Compiler, Draft, SchemaIndex, Schemas, UrlLoader};
+use jsonschema::{Draft, Registry, Validator};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde_json::{Map, Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+
 use thiserror::Error;
 
 use crate::protocol::{Component, FunctionCall, JsonObject, Metadata};
@@ -38,9 +37,8 @@ pub struct Catalog {
     id: String,
     document: Value,
     common_types: Value,
-    schemas: Schemas,
-    components: BTreeMap<String, SchemaIndex>,
-    functions: BTreeMap<String, SchemaIndex>,
+    components: BTreeMap<String, Validator>,
+    functions: BTreeMap<String, Validator>,
 }
 
 impl Catalog {
@@ -93,35 +91,17 @@ impl Catalog {
             {"$ref": "#/$defs/IndexSystemFunction"}
         ]}));
 
-        let mut compiler = Compiler::new();
-        compiler.set_default_draft(Draft::V2020_12);
-        compiler.use_loader(Box::new(Offline));
-        compiler
-            .add_resource(CATALOG, local)
-            .map_err(|error| compile_error(&error))?;
-        compiler
-            .add_resource(COMMON, common_types.clone())
-            .map_err(|error| compile_error(&error))?;
-        let mut schemas = Schemas::new();
-        let components = compile_entries(
-            &mut compiler,
-            &mut schemas,
-            "components",
-            "ComponentCommon",
-            components,
-        )?;
-        let functions = compile_entries(
-            &mut compiler,
-            &mut schemas,
-            "functions",
-            "FunctionCommon",
-            functions,
-        )?;
+        let registry = Registry::new()
+            .draft(Draft::Draft202012)
+            .extend([(CATALOG, local), (COMMON, common_types.clone())])
+            .and_then(jsonschema::RegistryBuilder::prepare)
+            .map_err(|error| invalid(error.to_string()))?;
+        let components = compile_entries(&registry, "components", "ComponentCommon", components)?;
+        let functions = compile_entries(&registry, "functions", "FunctionCommon", functions)?;
         Ok(Self {
             id,
             document,
             common_types,
-            schemas,
             components,
             functions,
         })
@@ -151,9 +131,9 @@ impl Catalog {
             if let Some(checks) = normalized.properties.remove("checks") {
                 normalized.properties.insert("@checks".to_owned(), checks);
             }
-            return self.validate_entry(&self.components, &component.component, &normalized);
+            return Self::validate_entry(&self.components, &component.component, &normalized);
         }
-        self.validate_entry(&self.components, &component.component, component)
+        Self::validate_entry(&self.components, &component.component, component)
     }
 
     pub(crate) fn component_checks<'a>(
@@ -224,25 +204,24 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the function name is unknown or an argument is invalid.
     pub fn validate_function(&self, call: &FunctionCall) -> Result<(), CatalogError> {
-        self.validate_entry(&self.functions, &call.name, call)
+        Self::validate_entry(&self.functions, &call.name, call)
     }
 
     fn validate_entry(
-        &self,
-        entries: &BTreeMap<String, SchemaIndex>,
+        entries: &BTreeMap<String, Validator>,
         name: &str,
         instance: &impl serde::Serialize,
     ) -> Result<(), CatalogError> {
-        let index = entries
+        let validator = entries
             .get(name)
             .ok_or_else(|| CatalogError::UnknownEntry(name.to_owned()))?;
         let instance =
             serde_json::to_value(instance).map_err(|error| invalid(error.to_string()))?;
-        self.schemas
-            .validate(&instance, *index)
+        validator
+            .validate(&instance)
             .map_err(|error| CatalogError::InvalidPayload {
                 name: name.to_owned(),
-                message: format!("{error:#}"),
+                message: format!("at '{}': {}", error.instance_path(), error.masked()),
             })
     }
 
@@ -523,10 +502,6 @@ fn invalid(message: impl Into<String>) -> CatalogError {
     CatalogError::InvalidCatalog(message.into())
 }
 
-fn compile_error(error: &boon::CompileError) -> CatalogError {
-    invalid(format!("{error:#}"))
-}
-
 fn entries<'a>(document: &'a Value, key: &str) -> Result<&'a Map<String, Value>, CatalogError> {
     if let Some(entries) = document.get(key) {
         entries
@@ -691,48 +666,34 @@ fn check_schema_refs(entries: &Map<String, Value>) -> Result<(), CatalogError> {
 }
 
 fn compile_entries(
-    compiler: &mut Compiler,
-    schemas: &mut Schemas,
+    registry: &Registry<'_>,
     kind: &str,
     common: &str,
     names: Vec<String>,
-) -> Result<BTreeMap<String, SchemaIndex>, CatalogError> {
+) -> Result<BTreeMap<String, Validator>, CatalogError> {
+    let options = jsonschema::draft202012::options()
+        .with_registry(registry)
+        .offline();
     names
         .into_iter()
         .map(|name| {
             let encoded = utf8_percent_encode(&name, NON_ALPHANUMERIC);
             let entry = format!("{CATALOG}#/{kind}/{encoded}");
             let envelope = format!("{COMMON}#/$defs/{common}");
-            let wrapper = format!("https://a2ui.org/specification/v1_0/validate/{kind}/{encoded}");
             let tag = if kind == "components" {
                 "component"
             } else {
                 "@call"
             };
             let discriminator = json!({"properties": {(tag): {"const": name}}, "required": [tag]});
-            compiler
-                .add_resource(
-                    &wrapper,
-                    json!({
-                        "allOf": [{"$ref": envelope}, {"$ref": entry}, discriminator],
-                        "unevaluatedProperties": false
-                    }),
-                )
-                .map_err(|error| compile_error(&error))?;
-            Ok((
-                name,
-                compiler
-                    .compile(&wrapper, schemas)
-                    .map_err(|error| compile_error(&error))?,
-            ))
+            let wrapper = json!({
+                "allOf": [{"$ref": envelope}, {"$ref": entry}, discriminator],
+                "unevaluatedProperties": false
+            });
+            let validator = options
+                .build(&wrapper)
+                .map_err(|error| invalid(format!("Invalid schema for {name}: {error}")))?;
+            Ok((name, validator))
         })
         .collect()
-}
-
-struct Offline;
-
-impl UrlLoader for Offline {
-    fn load(&self, url: &str) -> Result<Value, Box<dyn Error>> {
-        Err(format!("Schema resource is unavailable: {url}").into())
-    }
 }

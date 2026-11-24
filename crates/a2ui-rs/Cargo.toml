@@ -12,7 +12,6 @@ publish = false
 workspace = true
 
 [dependencies]
-boon.workspace = true
 fancy-regex.workspace = true
 fixed_decimal.workspace = true
 icu_calendar.workspace = true
@@ -23,6 +22,7 @@ icu_locale_core.workspace = true
 icu_plurals.workspace = true
 icu_provider.workspace = true
 jiff.workspace = true
+jsonschema.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
