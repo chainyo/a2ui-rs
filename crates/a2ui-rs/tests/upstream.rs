@@ -54,6 +54,10 @@ struct Case {
     #[serde(rename = "validationConfig")]
     validation_config: Option<a2ui_rs::validation::ValidationConfig>,
     expect: Option<Value>,
+    #[serde(rename = "expectFile")]
+    expect_file: Option<String>,
+    #[serde(rename = "builtinCatalog")]
+    builtin_catalog: Option<String>,
     #[serde(rename = "expectSelected")]
     expect_selected: Option<String>,
     assertions: Option<Value>,

@@ -140,6 +140,10 @@ fn session() -> Result<(RoutingSession<'static>, Instant, Vec<NodeId>), Box<dyn 
             "required": ["name"]
         }}
     });
+    catalog["$defs"]["anyFunction"]["oneOf"]
+        .as_array_mut()
+        .ok_or("missing Basic Catalog function union")?
+        .push(json!({"$ref": "#/functions/saveShipment"}));
     let catalog = Catalog::from_json(catalog, &common)?;
     let mut functions = LocalFunctions::default();
     functions.insert_action(catalog.id(), "saveShipment", |args, context| {

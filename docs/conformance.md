@@ -126,6 +126,14 @@ The `add_catalog` cases register a catalog between messages and check which surf
 The case for an earlier surface uses `catalogId` for a component override.
 The harness passes that override as `@catalogId`, the v1.0 component envelope field.
 
+## Catalog documents
+
+The harness loads the published Basic, MCP, and VegaChart catalogs.
+It checks entries selected by the catalog unions and validates component samples.
+The export cases compare catalog JSON before and after loading it again.
+The validation schema cases compare the bundled schemas with the pinned files.
+The derivation cases check entry selection, replacement, and errors for unknown entries.
+
 ## Multiple catalogs
 
 The selection cases build surfaces from the catalog IDs in the fixtures.
