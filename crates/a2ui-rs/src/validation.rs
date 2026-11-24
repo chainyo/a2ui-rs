@@ -216,6 +216,11 @@ impl MessageProcessor {
             for property in component.properties.values() {
                 self.validate_calls(property, default_catalog, None, config, 0)?;
             }
+            if let Some(accessibility) = &component.accessibility {
+                let value = serde_json::to_value(accessibility)
+                    .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
+                self.validate_calls(&value, default_catalog, None, config, 0)?;
+            }
         }
 
         let mut graph = BTreeMap::new();
