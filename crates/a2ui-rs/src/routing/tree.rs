@@ -8,9 +8,11 @@ use super::{
 };
 use crate::catalog::{Catalog, PropertyKind};
 use crate::data_model::DataModel;
+use crate::protocol::Metadata;
 use crate::resolution::DataScope;
 use crate::rpc::ReceiveError;
 use crate::surface::Surface;
+use crate::validation::MessageProcessor;
 
 mod action;
 
@@ -51,6 +53,8 @@ pub struct MountedNode {
     pub component: String,
     /// The data scope for this instance.
     pub scope: DataScope,
+    /// The component definition's `@metadata` envelope.
+    pub metadata: Option<Metadata>,
     /// The resolved properties, including child declarations.
     pub properties: BTreeMap<String, MountedProperty>,
     /// The mounted children in order.
@@ -60,10 +64,12 @@ pub struct MountedNode {
 /// The change to a mounted node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeChangeKind {
-    /// The node is available with its initial properties.
+    /// The node is available with its initial properties and metadata.
     Mounted,
     /// The properties or child list of a retained node changed.
     Updated,
+    /// The component definition's `@metadata` changed or cleared.
+    MetadataUpdated,
     /// The node and its property evaluations were removed.
     Disposed,
 }
@@ -151,6 +157,7 @@ impl MountedTrees {
 
     pub(super) fn publish(
         &mut self,
+        processor: &MessageProcessor,
         evaluations: &BTreeMap<EvaluationId, Evaluation>,
         update: &mut RoutingUpdate,
     ) {
@@ -164,37 +171,38 @@ impl MountedTrees {
                 );
                 tree.reported_errors.clone_from(&tree.template_errors);
             }
+            let model = processor.get(surface);
             for (&id, entry) in &mut tree.entries {
-                let kind = if !entry.published {
-                    NodeChangeKind::Mounted
-                } else if entry.next_children.is_some() || entry.properties_changed(evaluations) {
-                    NodeChangeKind::Updated
-                } else {
-                    continue;
-                };
-                self.changes.push(NodeChange {
-                    surface_id: surface.clone(),
-                    id,
-                    kind,
-                });
-                entry.node.properties = entry
-                    .evaluations
-                    .iter()
-                    .map(|(name, property)| {
-                        (
-                            name.clone(),
-                            MountedProperty {
-                                value: property.value(evaluations).clone(),
-                                binding_path: property.binding_path.clone(),
-                                is_action: property.is_action,
-                            },
-                        )
-                    })
-                    .collect();
-                entry.published = true;
-                if let Some(children) = entry.next_children.take() {
-                    entry.node.children = children;
+                let mounted = !entry.published;
+                if mounted || entry.next_children.is_some() || entry.properties_changed(evaluations)
+                {
+                    let kind = if mounted {
+                        NodeChangeKind::Mounted
+                    } else {
+                        NodeChangeKind::Updated
+                    };
+                    self.changes.push(NodeChange {
+                        surface_id: surface.clone(),
+                        id,
+                        kind,
+                    });
+                    entry.publish_properties(evaluations);
                 }
+
+                let metadata = model
+                    .and_then(|model| model.component(&entry.node.component_id))
+                    .and_then(|component| component.metadata.as_ref());
+                if entry.node.metadata.as_ref() != metadata {
+                    entry.node.metadata = metadata.cloned();
+                    if !mounted {
+                        self.changes.push(NodeChange {
+                            surface_id: surface.clone(),
+                            id,
+                            kind: NodeChangeKind::MetadataUpdated,
+                        });
+                    }
+                }
+                entry.published = true;
             }
         }
         update.nodes = std::mem::take(&mut self.changes);
@@ -358,6 +366,26 @@ struct Entry {
 }
 
 impl Entry {
+    fn publish_properties(&mut self, evaluations: &BTreeMap<EvaluationId, Evaluation>) {
+        self.node.properties = self
+            .evaluations
+            .iter()
+            .map(|(name, property)| {
+                (
+                    name.clone(),
+                    MountedProperty {
+                        value: property.value(evaluations).clone(),
+                        binding_path: property.binding_path.clone(),
+                        is_action: property.is_action,
+                    },
+                )
+            })
+            .collect();
+        if let Some(children) = self.next_children.take() {
+            self.node.children = children;
+        }
+    }
+
     fn properties_changed(&self, evaluations: &BTreeMap<EvaluationId, Evaluation>) -> bool {
         self.node.properties.len() != self.evaluations.len()
             || self.evaluations.iter().any(|(name, property)| {
@@ -590,6 +618,7 @@ impl Reconcile<'_> {
                 component_id: component_id.to_owned(),
                 component: definition.component.clone(),
                 scope: scope.clone(),
+                metadata: None,
                 properties: BTreeMap::new(),
                 children: Vec::new(),
             },

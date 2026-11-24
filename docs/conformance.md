@@ -17,6 +17,7 @@ Node resolution cases use `RoutingSession::mount_tree` and `advance`.
 The harness checks the initial node, bound values, and update counts as messages arrive.
 The collection case writes through a node binding and checks sibling values and node IDs.
 Mounted action cases check catalog action properties and metadata on emitted events.
+Node metadata cases compare property and metadata notification counts for the same node IDs.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.

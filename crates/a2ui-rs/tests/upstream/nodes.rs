@@ -40,14 +40,16 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                 | "direct_data_binding_and_function_call_schemas"
                 | "event_property_is_not_an_action"
                 | "invoke_action_with_dispatch_metadata"
+                | "metadata_only_update_emits_metadata_not_props"
+                | "metadata_cleared_when_update_omits_it"
+                | "metadata_and_props_update_together"
         )
 }
 
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let path = case.fixture.as_ref().ok_or("missing node fixture")?;
     let conformance = upstream.join("conformance");
-    let mut fixture: Fixture =
-        serde_saphyr::from_str(&fs::read_to_string(conformance.join(path))?)?;
+    let fixture: Fixture = serde_saphyr::from_str(&fs::read_to_string(conformance.join(path))?)?;
     if !fixture.surface && (fixture.data != json!({}) || !fixture.components.is_empty()) {
         return Err("expected a fixture with no initial surface".into());
     }
@@ -62,19 +64,12 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     session.mount_tree("s");
     let now = Instant::now();
     if fixture.surface {
-        for component in &mut fixture.components {
-            let object = component
-                .as_object_mut()
-                .ok_or("invalid component definition")?;
-            if let Some(metadata) = object.remove("metadata") {
-                object.insert("@metadata".to_owned(), metadata);
-            }
-        }
+        let components = fixture_components(fixture.components)?;
         session.receive(
             serde_json::from_value(json!({
                 "version": "1.0", "createSurface": {
                     "surfaceId": "s", "catalogId": id,
-                    "dataModel": fixture.data, "components": fixture.components,
+                    "dataModel": fixture.data, "components": components,
                 }
             }))?,
             now,
@@ -103,6 +98,18 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         }
     }
     Ok(())
+}
+
+fn fixture_components(mut components: Vec<Value>) -> Result<Vec<Value>, TestError> {
+    for component in &mut components {
+        let object = component
+            .as_object_mut()
+            .ok_or("invalid component definition")?;
+        if let Some(metadata) = object.remove("metadata") {
+            object.insert("@metadata".to_owned(), metadata);
+        }
+    }
+    Ok(components)
 }
 
 fn process_messages(
@@ -155,7 +162,7 @@ fn scoped_step(
     step: &Value,
 ) -> Result<(), TestError> {
     let before = node_ids(session)?;
-    let invocation = apply_scoped_step(session, &before, step)?;
+    let invocation = apply_scoped_step(session, now, &before, step)?;
     let mut events = Vec::new();
     let update = session.advance(
         now,
@@ -197,28 +204,40 @@ fn scoped_step(
     }
 
     let mut counts = BTreeMap::<_, u64>::new();
+    let mut metadata_counts = BTreeMap::<_, u64>::new();
     for change in update.nodes {
-        if change.kind != NodeChangeKind::Updated || change.surface_id != "s" {
+        if change.surface_id != "s" {
             return Err(format!("unexpected node change: {change:?}").into());
         }
         let (path, _) = after
             .iter()
             .find(|(_, id)| **id == change.id)
             .ok_or("unknown changed node")?;
-        *counts.entry(path).or_default() += 1;
+        let counter = match change.kind {
+            NodeChangeKind::Updated => &mut counts,
+            NodeChangeKind::MetadataUpdated => &mut metadata_counts,
+            _ => return Err(format!("unexpected node change: {change:?}").into()),
+        };
+        *counter.entry(path).or_default() += 1;
     }
-    if !update.errors.is_empty() || serde_json::to_value(counts)? != expected["emissions"] {
+    let emissions = serde_json::to_value(counts)?;
+    let metadata_emissions = serde_json::to_value(metadata_counts)?;
+    let empty = json!({});
+    if !update.errors.is_empty()
+        || emissions != expected["emissions"]
+        || &metadata_emissions != expected.get("metadata_emissions").unwrap_or(&empty)
+    {
         return Err(format!(
-            "unexpected emissions or expression errors: {:?}",
+            "unexpected property emissions {emissions}, metadata emissions {metadata_emissions}, or errors: {:?}",
             update.errors
-        )
-        .into());
+        ).into());
     }
     Ok(())
 }
 
 fn apply_scoped_step(
     session: &mut RoutingSession<'_>,
+    now: Instant,
     before: &BTreeMap<String, NodeId>,
     step: &Value,
 ) -> Result<Option<a2ui_rs::routing::EvaluationId>, TestError> {
@@ -249,6 +268,19 @@ fn apply_scoped_step(
             let path = step["path"].as_str().ok_or("missing data path")?;
             let value = step.get("value").ok_or("missing value")?.clone();
             session.write_binding("s", &DataScope::default(), path, value)?;
+        }
+        Some("update_components") => {
+            let input = step["components"]
+                .as_array()
+                .ok_or("missing components")?
+                .clone();
+            let components = fixture_components(input)?;
+            let response = session.receive(serde_json::from_value(json!({
+                "version": "1.0", "updateComponents": {"surfaceId": "s", "components": components}
+            }))?, now)?;
+            if response.is_some() {
+                return Err("unexpected renderer response to component update".into());
+            }
         }
         _ => return Err("unsupported node fixture operation".into()),
     }
@@ -301,6 +333,12 @@ fn assert_nodes(session: &RoutingSession<'_>, expected: &Value) -> Result<(), Te
         for (field, actual) in fields {
             if expected.get(field).is_some_and(|value| value != actual) {
                 return Err(format!("unexpected {field} at {path}: {actual}").into());
+            }
+        }
+        if let Some(metadata) = expected.get("metadata") {
+            let actual = serde_json::to_value(&node.metadata)?;
+            if &actual != metadata {
+                return Err(format!("unexpected metadata at {path}: {actual}").into());
             }
         }
         for (name, expected) in expected["props"].as_object().into_iter().flatten() {
