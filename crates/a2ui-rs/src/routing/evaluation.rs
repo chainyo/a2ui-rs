@@ -459,15 +459,7 @@ impl Tick<'_, '_, '_> {
             Arguments::Waiting => return Ok(Progress::Waiting),
             Arguments::Cancelled => return Ok(Progress::Cancelled),
         };
-        if call.args.is_some() || !args.is_empty() {
-            call.args = Some(args);
-        }
-        if declared {
-            let catalog = self.lookup_catalog(&catalog_id)?;
-            catalog
-                .validate_function(&call)
-                .map_err(|error| validation_error(&call.name, error))?;
-        }
+        self.set_resolved_arguments(&mut call, args, &catalog_id, declared, local)?;
 
         let empty = JsonObject::new();
         let key = serde_json::to_string(&(
@@ -514,6 +506,31 @@ impl Tick<'_, '_, '_> {
             },
         );
         result
+    }
+
+    fn set_resolved_arguments(
+        &self,
+        call: &mut FunctionCall,
+        mut args: JsonObject,
+        catalog_id: &str,
+        declared: bool,
+        local: bool,
+    ) -> Result<(), RoutingError> {
+        let catalog = declared
+            .then(|| self.lookup_catalog(catalog_id))
+            .transpose()?;
+        if let Some(catalog) = catalog.filter(|_| local) {
+            catalog.preserve_required_local_arguments(call, &mut args);
+        }
+        if call.args.is_some() || !args.is_empty() {
+            call.args = Some(args);
+        }
+        if let Some(catalog) = catalog {
+            catalog
+                .validate_function(call)
+                .map_err(|error| validation_error(&call.name, error))?;
+        }
+        Ok(())
     }
 
     fn reuse_slot(

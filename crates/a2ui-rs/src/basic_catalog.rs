@@ -5,10 +5,19 @@ use serde_json::{Value, json};
 use crate::protocol::JsonObject;
 use crate::resolution::{LocalFunctions, to_boolean};
 
-/// Registers the Basic Catalog email validator and boolean functions.
+/// Registers the Basic Catalog `required`, `email`, `and`, `or`, and `not` functions.
 ///
 /// Supply the ID of the loaded v1.0 Basic Catalog.
 pub fn register_validation_functions(functions: &mut LocalFunctions<'_>, catalog_id: &str) {
+    functions.insert(catalog_id, "required", |args| {
+        let valid = match args.get("value") {
+            None | Some(Value::Null) => false,
+            Some(Value::String(value)) => !value.is_empty(),
+            Some(Value::Array(items)) => !items.is_empty(),
+            Some(_) => true,
+        };
+        Ok(json!({"valid": valid}))
+    });
     functions.insert(catalog_id, "email", |args| {
         let value = args["value"].as_str().ok_or("Expected an email string")?;
         Ok(if is_email(value) {
