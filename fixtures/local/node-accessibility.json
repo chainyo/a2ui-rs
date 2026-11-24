@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "shipments",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {
+      "shipments": [
+        {"city": "London", "status": "In transit", "hidden": false},
+        {"city": "Bristol", "status": "Delivered", "hidden": "TRUE"}
+      ]
+    },
+    "components": [
+      {"id": "root", "component": "Column", "children": {"componentId": "status", "path": "/shipments"}},
+      {
+        "id": "status",
+        "component": "Text",
+        "text": "Shipment update",
+        "accessibility": "Catalog-specific text",
+        "@accessibility": {
+          "label": {"@path": "city"},
+          "description": {"@call": "formatString", "args": {"value": "Status: ${status}"}},
+          "live": "polite",
+          "hidden": {"@path": "hidden"}
+        }
+      }
+    ]
+  }
+}

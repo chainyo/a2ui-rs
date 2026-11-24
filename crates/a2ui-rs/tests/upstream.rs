@@ -16,6 +16,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[path = "upstream/accessibility.rs"]
+mod accessibility;
 #[path = "upstream/nodes.rs"]
 mod nodes;
 #[path = "upstream/resolution.rs"]
@@ -50,6 +52,7 @@ struct Case {
     #[serde(rename = "validationConfig")]
     validation_config: Option<a2ui_rs::validation::ValidationConfig>,
     expect: Option<Value>,
+    assertions: Option<Value>,
     messages: Option<Value>,
     #[serde(rename = "expectError")]
     expect_error: Option<Value>,
@@ -138,6 +141,10 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
                 match execute_supported_case(&upstream, &suite_name, &case) {
+                    Ok(()) if accessibility::supports(&suite_name, &case) => {
+                        pending += 1;
+                        ("skipped", Some("Core assertions passed. Platform accessibility and axe-core assertions pending.".to_owned()))
+                    }
                     Ok(()) => {
                         passed += 1;
                         ("passed", None)
@@ -228,7 +235,8 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn supports_case(suite: &str, case: &Case) -> bool {
-    if nodes::supports(suite, case)
+    if accessibility::supports(suite, case)
+        || nodes::supports(suite, case)
         || validation::supports(suite, case)
         || resolution::supports(suite, case)
         || rpc::supports(suite, case)
@@ -276,7 +284,9 @@ fn supports_case(suite: &str, case: &Case) -> bool {
 }
 
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
-    if nodes::supports(suite, case) {
+    if accessibility::supports(suite, case) {
+        accessibility::execute(upstream, case)
+    } else if nodes::supports(suite, case) {
         nodes::execute(upstream, case)
     } else if validation::supports(suite, case) {
         validation::execute(upstream, case)

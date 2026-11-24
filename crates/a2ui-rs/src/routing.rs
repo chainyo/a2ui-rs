@@ -28,6 +28,7 @@ pub use tree::{
 };
 
 const CACHE_LIMIT: usize = 256;
+const ACCESSIBILITY_PROPERTY: &str = "@accessibility";
 
 /// Identifies a mounted binding, check, or action.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

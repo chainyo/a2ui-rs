@@ -4,7 +4,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::{
-    Evaluation, EvaluationId, EvaluationState, RoutingError, RoutingSession, RoutingUpdate, Task,
+    ACCESSIBILITY_PROPERTY, Evaluation, EvaluationId, EvaluationState, RoutingError,
+    RoutingSession, RoutingUpdate, Task,
 };
 use crate::catalog::{Catalog, PropertyKind};
 use crate::data_model::DataModel;
@@ -492,6 +493,7 @@ struct Definition {
     children: Vec<ChildDefinition>,
 }
 
+#[derive(Default)]
 struct PropertyDefinition {
     binding_path: Option<String>,
     is_action: bool,
@@ -520,7 +522,7 @@ fn definitions(
             let checks =
                 catalog.and_then(|catalog| catalog.component_checks(component).ok().flatten());
             let check_count = checks.and_then(Value::as_array).map(Vec::len);
-            let properties = component
+            let mut properties: BTreeMap<_, _> = component
                 .properties
                 .iter()
                 .filter(|(name, value)| {
@@ -549,6 +551,12 @@ fn definitions(
                     )
                 })
                 .collect();
+            if component.accessibility.is_some() {
+                properties.insert(
+                    ACCESSIBILITY_PROPERTY.to_owned(),
+                    PropertyDefinition::default(),
+                );
+            }
             let children = shape
                 .children
                 .into_iter()

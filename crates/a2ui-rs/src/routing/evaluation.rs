@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::check::{CheckRule, ValidationResult};
 use super::{
-    Evaluation, EvaluationState, EventAction, EventProgress, Flight, Path, RouterState,
-    RoutingError, Slot, SlotState, Task,
+    ACCESSIBILITY_PROPERTY, Evaluation, EvaluationState, EventAction, EventProgress, Flight, Path,
+    RouterState, RoutingError, Slot, SlotState, Task,
 };
 use crate::catalog::{Catalog, PropertyKind};
 use crate::protocol::{
@@ -199,6 +199,25 @@ impl Tick<'_, '_, '_> {
         let Some(component) = self.component(context.surface, id) else {
             return Ok(Progress::Ready(None));
         };
+        if name == ACCESSIBILITY_PROPERTY {
+            let Some(accessibility) = &component.accessibility else {
+                return Ok(Progress::Ready(None));
+            };
+            let payload = serde_json::to_value(accessibility).map_err(RoutingError::expression)?;
+            let kinds = [
+                ("label", PropertyKind::String),
+                ("description", PropertyKind::String),
+                ("hidden", PropertyKind::Boolean),
+            ]
+            .into_iter()
+            .filter_map(|(name, kind)| {
+                payload
+                    .get(name)
+                    .map(|value| (std::ptr::from_ref(value), kind))
+            })
+            .collect();
+            return self.resolve(context, &payload, &Location::default(), &kinds);
+        }
         let catalog = self.catalog_id(context.surface, component.catalog_id.clone())?;
         let catalog = self.lookup_catalog(&catalog)?;
         let payload =

@@ -176,6 +176,12 @@ Read `isValid`, `validationErrors`, and `validationResults` from the node's prop
 Error results make the node invalid. Warning and info results remain in `validationResults`.
 The session reports a validation change as a property update.
 
+Read the resolved `@accessibility` envelope from the node's properties.
+The session resolves its label, description, and hidden values in the node's data scope.
+The envelope also supplies the live announcement policy.
+An accessibility change uses the same property update as other node changes.
+A catalog property named `accessibility` stays in the node's properties.
+
 Use `MountedProperty::is_action` to find action properties.
 Call `dispatch_node_action` with the node ID and property name.
 The session resolves arguments in the node's scope when it runs the action.

@@ -19,6 +19,8 @@ The collection case writes through a node binding and checks sibling values and 
 Mounted action cases check catalog action properties and metadata on emitted events.
 Node metadata cases compare property and metadata notification counts for the same node IDs.
 The mounted validation case checks warning and info results in the node's properties.
+The accessibility cases compare resolved attributes on mounted nodes.
+The report keeps these cases pending until an adapter verifies the platform and axe-core assertions.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.
