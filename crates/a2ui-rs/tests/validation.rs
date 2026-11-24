@@ -8,7 +8,7 @@ use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::AgentToRendererMessage;
 use a2ui_rs::validation::{MessageProcessor, ValidationError};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,5 +73,22 @@ fn rejects_invalid_candidates_without_changing_surface_state() -> Result<(), Box
         matches!(processor.apply(without_override), Err(ValidationError::Catalog(CatalogError::InvalidPayload { name, .. })) if name == "Summary")
     );
     assert_eq!(processor.get("checkout"), Some(&after_override));
+    Ok(())
+}
+
+#[test]
+fn catalog_rejects_an_unavailable_resource_in_common_types() -> Result<(), Box<dyn Error>> {
+    let common_types = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/upstream/specification/v1_0/json/common_types.json");
+    let mut common_types: Value = serde_json::from_slice(&fs::read(common_types)?)?;
+    let fixture: Fixture = serde_json::from_str(include_str!(
+        "../../../fixtures/local/catalog-topology.json"
+    ))?;
+    let unavailable = "https://schemas.example/component-id.json";
+    common_types["$defs"]["ComponentId"] = json!({"$ref": unavailable});
+    assert!(matches!(
+        Catalog::from_json(fixture.catalog, &common_types),
+        Err(CatalogError::InvalidCatalog(message)) if message.contains(unavailable)
+    ));
     Ok(())
 }
