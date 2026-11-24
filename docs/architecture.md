@@ -64,6 +64,8 @@ The processor checks component relationships on the graph that would result from
 The checks include parent and child rules, missing references, cycles, depth, and reachability from `root`.
 An error leaves the surface unchanged.
 Use `ValidationConfig` to permit incomplete graphs during streaming.
+Use `apply_with_config` to set the rules for one message.
+Omitted rules use strict validation. The next call to `apply` uses the processor's rules.
 
 ## Data model
 

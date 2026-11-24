@@ -2,13 +2,44 @@ use std::fs;
 use std::path::Path;
 
 use a2ui_rs::catalog::Catalog;
-use a2ui_rs::protocol::AgentToRendererMessage;
+use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage};
+use a2ui_rs::surface::SurfaceError;
 use a2ui_rs::validation::{MessageProcessor, ValidationConfig, ValidationError};
 use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
 
+pub(super) fn pending_transaction_error(suite: &str, case: &Case) -> bool {
+    suite == super::SURFACE_SUITE
+        && case.protocol_version.as_deref() == Some("1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_batch_duplicate_component_ids_in_same_message_error"
+                | "test_batch_atomic_rollback_on_candidate_topology_cycle"
+        )
+}
+
+fn supports_transaction(suite: &str, case: &Case) -> bool {
+    suite == super::SURFACE_SUITE
+        && case.action == "process_messages"
+        && case.protocol_version.as_deref() == Some("1.0")
+        && (pending_transaction_error(suite, case)
+            || matches!(
+                case.name.as_str(),
+                "test_permissive_mode_allows_orphan_components"
+                    | "test_permissive_mode_allows_dangling_references"
+                    | "test_v10_call_validation_config_relaxes_strict_processor"
+                    | "test_v10_call_validation_config_tightens_permissive_processor"
+                    | "test_v10_call_validation_config_leaves_out_rules_as_strict"
+                    | "test_composition_constraints_preserved_on_partial_parent_update"
+                    | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
+            ))
+}
+
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
+    if supports_transaction(suite, case) {
+        return true;
+    }
     if suite == "core/composition_constraints.yaml" && case.action == "process_messages" {
         return matches!(
             case.name.as_str(),
@@ -83,7 +114,7 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         )
 }
 
-pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
+pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
     if case.action == "from_json" {
         return execute_catalog(upstream, case, &common);
@@ -107,6 +138,14 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
             processor.add_catalog(Catalog::from_json(alias, &common)?)?;
         }
     }
+    let transaction = supports_transaction(suite, case);
+    if transaction && case.catalog_paths.is_empty() {
+        let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+        for id in ["basic", "test-catalog-v10"] {
+            basic["catalogId"] = json!(id);
+            processor.add_catalog(Catalog::from_json(basic.clone(), &common)?)?;
+        }
+    }
     if let Some(document) = &case.catalog {
         let mut document = catalog_document(case, document)?;
         if case.name.starts_with("test_composition_") {
@@ -117,6 +156,24 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         processor.add_catalog(Catalog::from_json(document, &common)?)?;
     }
 
+    if let Some(messages) = &case.messages {
+        if !case.steps.is_empty() {
+            return Err("validation fixture has both messages and steps".into());
+        }
+        return apply_messages(
+            &mut processor,
+            case,
+            messages,
+            None,
+            case.expect_error.as_ref(),
+            transaction,
+        )
+        .and_then(|()| {
+            case.expect
+                .as_ref()
+                .map_or(Ok(()), |expect| assert_state(&processor, expect))
+        });
+    }
     if case.steps.is_empty() {
         return Err("missing validation steps".into());
     }
@@ -124,51 +181,20 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         let messages = step
             .get("messages")
             .or_else(|| step.get("payload"))
-            .and_then(Value::as_array)
             .ok_or("missing validation messages")?;
         let rules = step
             .get("validationConfig")
             .cloned()
             .map(serde_json::from_value)
-            .transpose()?
-            .unwrap_or(config);
-        let expected = step.get("expectError");
-        let mut rejected = false;
-        for (index, message) in messages.iter().enumerate() {
-            let decoded: AgentToRendererMessage = serde_json::from_value(message.clone())?;
-            if let Err(error) = processor.apply_with_config(decoded, rules) {
-                if index + 1 != messages.len() {
-                    return Err(
-                        format!("validation failed before the last message: {error}").into(),
-                    );
-                }
-                let expected = expected.ok_or_else(|| error.to_string())?;
-                let category = match error {
-                    ValidationError::ComponentDepth | ValidationError::FunctionDepth
-                        if expected["category"] == "RecursionError" =>
-                    {
-                        "RecursionError"
-                    }
-                    ValidationError::MissingCatalog
-                    | ValidationError::UnknownCatalog(_)
-                    | ValidationError::DuplicateCatalog(_) => "CatalogError",
-                    ValidationError::Orphan(_) if case.action == "process_messages" => {
-                        "IntegrityError"
-                    }
-                    _ => "ValidationError",
-                };
-                let code = match error {
-                    ValidationError::UnallowedParent { .. } => Some("UNALLOWED_PARENT"),
-                    ValidationError::UnallowedChild { .. } => Some("UNALLOWED_CHILD"),
-                    _ => None,
-                };
-                assert_rejection(expected, category, code, &error.to_string())?;
-                rejected = true;
-            }
-        }
-        if expected.is_some() && !rejected {
-            return Err("expected validation error".into());
-        }
+            .transpose()?;
+        apply_messages(
+            &mut processor,
+            case,
+            messages,
+            rules,
+            step.get("expectError"),
+            transaction,
+        )?;
         if let Some(expect) = step.get("expect") {
             assert_state(&processor, expect)?;
         }
@@ -177,6 +203,117 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         assert_state(&processor, expect)?;
     }
     Ok(())
+}
+
+fn apply_messages(
+    processor: &mut MessageProcessor,
+    case: &Case,
+    messages: &Value,
+    rules: Option<ValidationConfig>,
+    expected: Option<&Value>,
+    transaction: bool,
+) -> Result<(), TestError> {
+    let messages = messages
+        .as_array()
+        .filter(|items| !items.is_empty())
+        .ok_or("missing validation messages")?;
+    for (index, message) in messages.iter().enumerate() {
+        let decoded: AgentToRendererMessage = serde_json::from_value(message.clone())?;
+        let surface = if transaction {
+            Some(transaction_surface(&decoded)?.to_owned())
+        } else {
+            None
+        };
+        let before = surface.as_deref().and_then(|id| processor.get(id)).cloned();
+        let result = match rules {
+            Some(rules) => processor.apply_with_config(decoded, rules),
+            None => processor.apply(decoded),
+        };
+        if let Err(error) = result {
+            if index + 1 != messages.len() {
+                return Err(format!("validation failed before the last message: {error}").into());
+            }
+            let expected = expected.ok_or_else(|| error.to_string())?;
+            if let Some(surface) = surface {
+                if processor.get(&surface) != before.as_ref() {
+                    return Err(format!("rejected message changed surface {surface}").into());
+                }
+                return assert_transaction_error(expected, &surface, &error);
+            }
+            let category = error_category(&error, expected, case);
+            let code = match error {
+                ValidationError::UnallowedParent { .. } => Some("UNALLOWED_PARENT"),
+                ValidationError::UnallowedChild { .. } => Some("UNALLOWED_CHILD"),
+                _ => None,
+            };
+            return assert_rejection(expected, category, code, &error.to_string());
+        }
+    }
+    if expected.is_some() {
+        return Err("expected validation error".into());
+    }
+    Ok(())
+}
+
+fn transaction_surface(message: &AgentToRendererMessage) -> Result<&str, TestError> {
+    let AgentToRendererMessage::V1(operation) = message;
+    match operation {
+        AgentToRenderer::CreateSurface(create) => Ok(&create.surface_id),
+        AgentToRenderer::UpdateComponents(update) => Ok(&update.surface_id),
+        _ => Err("unexpected transaction fixture operation".into()),
+    }
+}
+
+fn error_category(error: &ValidationError, expected: &Value, case: &Case) -> &'static str {
+    match error {
+        ValidationError::ComponentDepth | ValidationError::FunctionDepth
+            if expected["category"] == "RecursionError" =>
+        {
+            "RecursionError"
+        }
+        ValidationError::MissingCatalog
+        | ValidationError::UnknownCatalog(_)
+        | ValidationError::DuplicateCatalog(_) => "CatalogError",
+        ValidationError::Orphan(_) if case.action == "process_messages" => "IntegrityError",
+        _ => "ValidationError",
+    }
+}
+
+fn assert_transaction_error(
+    expected: &Value,
+    surface: &str,
+    error: &ValidationError,
+) -> Result<(), TestError> {
+    let mut core = expected
+        .as_object()
+        .ok_or("missing transaction error fields")?
+        .clone();
+    let renderer = core.remove("rendererError");
+    if core.remove("surfaceId").is_some_and(|id| id != surface) {
+        return Err("transaction failed on the wrong surface".into());
+    }
+    let message = error.to_string();
+    let category = match error {
+        ValidationError::Surface(SurfaceError::DuplicateComponent(_))
+        | ValidationError::CircularReference(_)
+        | ValidationError::Orphan(_) => "IntegrityError",
+        ValidationError::DanglingReference { .. } => "ValidationError",
+        _ => return Err(format!("unexpected transaction failure: {error}").into()),
+    };
+    if let Some(renderer) = renderer {
+        let renderer_message = renderer["error"]["message"]
+            .as_str()
+            .ok_or("missing renderer error message")?;
+        if renderer["version"] != "1.0"
+            || renderer["error"]["surfaceId"] != surface
+            || !message.contains(renderer_message)
+        {
+            return Err(
+                format!("unexpected renderer fixture expectation {renderer}: {message}").into(),
+            );
+        }
+    }
+    assert_rejection(&Value::Object(core), category, None, &message)
 }
 
 fn execute_catalog(upstream: &Path, case: &Case, common: &Value) -> Result<(), TestError> {
@@ -275,7 +412,9 @@ fn assert_rejection(
         && (fields
             .keys()
             .any(|key| !matches!(key.as_str(), "category" | "message" | "code"))
-            || expected["category"].as_str() != Some(category)
+            || expected
+                .get("category")
+                .is_some_and(|value| value.as_str() != Some(category))
             || expected
                 .get("code")
                 .is_some_and(|value| value.as_str() != code))
