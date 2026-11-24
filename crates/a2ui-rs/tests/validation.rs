@@ -3,9 +3,13 @@
 use std::error::Error;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::AgentToRendererMessage;
+use a2ui_rs::resolution::LocalFunctions;
+use a2ui_rs::routing::{NodeTree, RoutingSession};
+use a2ui_rs::rpc::{ReceiveError, RpcHandler};
 use a2ui_rs::validation::{MessageProcessor, ValidationError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -90,5 +94,59 @@ fn catalog_rejects_an_unavailable_resource_in_common_types() -> Result<(), Box<d
         Catalog::from_json(fixture.catalog, &common_types),
         Err(CatalogError::InvalidCatalog(message)) if message.contains(unavailable)
     ));
+    Ok(())
+}
+
+#[test]
+fn rejected_self_reference_reports_the_surface_and_keeps_the_mounted_tree()
+-> Result<(), Box<dyn Error>> {
+    let common_types = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/upstream/specification/v1_0/json/common_types.json");
+    let common_types = serde_json::from_slice(&fs::read(common_types)?)?;
+    let fixture: Fixture = serde_json::from_str(include_str!(
+        "../../../fixtures/local/catalog-topology.json"
+    ))?;
+    let mut session = RoutingSession::new(RpcHandler::default(), LocalFunctions::default());
+    session.add_catalog(Catalog::from_json(fixture.catalog, &common_types)?)?;
+    let now = Instant::now();
+    let surface = "checkout";
+    session.mount_tree(surface);
+    let [create, dangling, ..] = fixture.messages;
+    session.receive(create, now)?;
+    assert!(session.advance(now, None).errors.is_empty());
+    let root = session.node_tree(surface).and_then(NodeTree::root);
+    assert!(root.is_some());
+    let before = session.processor().get(surface).cloned();
+
+    let update = serde_json::from_value(json!({
+        "version": "1.0",
+        "updateComponents": {
+            "surfaceId": surface,
+            "components": [{"id": "root", "component": "Stack", "slots": ["root"]}]
+        }
+    }))?;
+    let Err(error @ ReceiveError::Validation(ValidationError::SelfReference(_))) =
+        session.receive(update, now)
+    else {
+        return Err("expected the self-reference to fail".into());
+    };
+    assert_eq!(
+        serde_json::to_value(error.renderer_error_for_surface(surface))?,
+        json!({"version": "1.0", "error": {
+            "code": "RECURSION_LIMIT_EXCEEDED",
+            "surfaceId": surface,
+            "message": "Self-reference detected at component 'root'"
+        }})
+    );
+
+    let Err(error) = session.receive(dangling, now) else {
+        return Err("expected the dangling child to fail".into());
+    };
+    assert!(error.renderer_error_for_surface(surface).is_none());
+    let update = session.advance(now, None);
+    assert!(update.nodes.is_empty());
+    assert!(update.errors.is_empty());
+    assert_eq!(session.processor().get(surface), before.as_ref());
+    assert_eq!(session.node_tree(surface).and_then(NodeTree::root), root);
     Ok(())
 }

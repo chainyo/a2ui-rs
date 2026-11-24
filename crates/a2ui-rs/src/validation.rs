@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::catalog::{Catalog, CatalogError};
 use crate::expression::{Expression, parse_template};
 use crate::protocol::{
-    AgentToRenderer, AgentToRendererMessage, Component, Components, FunctionCall, UpdateDataModel,
+    AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
+    GenericError, RendererError, RendererToAgent, RendererToAgentMessage, UpdateDataModel,
 };
 use crate::resolution::{
     DataScope, LocalFunctions, ResolveError, ResolvedComponent, Resolver, validate_call_shape,
@@ -548,4 +549,27 @@ pub enum ValidationError {
     /// The local expression template is invalid.
     #[error(transparent)]
     Expression(#[from] crate::expression::ParseError),
+}
+
+impl ValidationError {
+    /// Builds a renderer error for duplicate component IDs and component cycles.
+    ///
+    /// Supply the surface ID from the rejected message.
+    /// Returns `None` for other validation failures.
+    #[must_use]
+    pub fn renderer_error(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
+        let code = match self {
+            Self::Surface(SurfaceError::DuplicateComponent(_)) => "INTEGRITY_ERROR",
+            Self::SelfReference(_) | Self::CircularReference(_) => "RECURSION_LIMIT_EXCEEDED",
+            _ => return None,
+        };
+        Some(RendererToAgentMessage::V1(RendererToAgent::Error(
+            RendererError::Generic(GenericError {
+                code: code.to_owned(),
+                message: self.to_string(),
+                target: ErrorTarget::SurfaceId(surface_id.to_owned()),
+                extra: BTreeMap::new(),
+            }),
+        )))
+    }
 }

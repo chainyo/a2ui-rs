@@ -113,6 +113,7 @@ impl RpcHandler {
     /// Applies an agent message and returns a renderer response when required.
     ///
     /// A response at or after its deadline cannot settle an expired call.
+    /// Use [`ReceiveError::renderer_error_for_surface`] to report supported surface errors.
     ///
     /// # Errors
     /// Returns an error if the processor rejects a surface message or the handler is disposed.
@@ -592,6 +593,17 @@ pub enum ReceiveError {
 }
 
 impl ReceiveError {
+    /// Builds a renderer error for a rejected surface message.
+    ///
+    /// Supply the surface ID from the rejected message. See [`ValidationError::renderer_error`].
+    #[must_use]
+    pub fn renderer_error_for_surface(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
+        match self {
+            Self::Validation(error) => error.renderer_error(surface_id),
+            Self::Envelope { .. } | Self::Disposed => None,
+        }
+    }
+
     /// Returns a correlated renderer error for an invalid RPC envelope.
     #[must_use]
     pub fn renderer_error(&self) -> Option<RendererToAgentMessage> {

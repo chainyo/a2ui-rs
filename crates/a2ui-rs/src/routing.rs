@@ -160,6 +160,8 @@ impl<'f> RoutingSession<'f> {
 
     /// Applies an incoming message. Call `advance` to publish expression and node changes.
     ///
+    /// Use [`ReceiveError::renderer_error_for_surface`] to report supported surface errors.
+    ///
     /// # Errors
     /// Returns an error if the handler rejects the message.
     pub fn receive(
