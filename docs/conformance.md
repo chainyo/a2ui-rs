@@ -21,6 +21,9 @@ Node metadata cases compare property and metadata notification counts for the sa
 The mounted validation cases check warning and info results, email validation, and boolean composition.
 Function cases check how `and` and `not` use the result of `required`.
 The regex cases check matching, pattern rejection, and input limits.
+The formatting cases check date patterns, timestamp offsets, currencies, and plural forms.
+They also check catalog selection in templates and how validation results control digit grouping.
+The mounted formatting test checks the effects of locale, time zone, and surface data changes.
 The accessibility cases compare resolved attributes on mounted nodes.
 The report keeps these cases pending until an adapter verifies the platform and axe-core assertions.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.

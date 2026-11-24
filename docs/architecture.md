@@ -100,6 +100,15 @@ It registers `required`, `email`, `numeric`, `length`, `regex`, `and`, `or`, and
 The protocol converts an invalid numeric binding to zero.
 `length` counts Unicode code points in the resolved string.
 `regex` checks the A2UI dialect and safety rules before it matches a value.
+
+Use `basic_catalog::register_formatting_functions` for `formatNumber`, `formatCurrency`, `formatDate`, and `pluralize`.
+Set a BCP 47 locale and an IANA time zone with `FormattingOptions::new`.
+The locale controls the number and currency formats, date names, and plural rules.
+`formatCurrency` uses two decimal places when the call omits `decimals`.
+`formatDate` uses the configured time zone for epoch values and date strings without an offset.
+If a date string has an offset, `formatDate` uses that offset.
+The `ISO` format gives the timestamp in UTC with three fractional digits.
+
 Use the catalog ID and function name for each registration.
 The processor checks calls against the catalog schemas before it invokes handlers.
 The SDK evaluates `formatString` and the collection function `@index`.
