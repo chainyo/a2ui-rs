@@ -20,6 +20,13 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
                     | "test_error_response_create_surface_duplicate_surface_id"
                     | "test_error_response_update_components_unknown_surface"
                     | "test_error_response_update_components_duplicate_id_in_batch"
+                    | "test_error_response_update_components_unknown_type_strict"
+                    | "test_error_response_update_components_invalid_property_type"
+                    | "test_error_response_update_components_extra_forbidden_property"
+                    | "test_error_response_update_components_invalid_uax31_id"
+                    | "test_error_response_update_components_unallowed_parent"
+                    | "test_error_response_update_components_unallowed_parent_root"
+                    | "test_error_response_update_components_unallowed_child"
                     | "test_error_response_update_components_circular_reference"
                     | "test_error_response_update_components_dangling_child_strict"
                     | "test_error_response_update_components_orphaned_component_strict"
@@ -154,7 +161,7 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         }
     }
     let transaction = supports_transaction(suite, case);
-    if transaction && case.catalog_paths.is_empty() {
+    if transaction && case.catalog_paths.is_empty() && case.catalog.is_none() {
         let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
         for id in ["basic", "test-catalog-v10"] {
             basic["catalogId"] = json!(id);
@@ -315,6 +322,8 @@ fn assert_transaction_error(
         .clone();
     let renderer = core.remove("rendererError");
     let path = core.remove("path");
+    let details = core.remove("details");
+    let mut envelope = None;
     if core.remove("surfaceId").is_some_and(|id| id != surface) {
         return Err("transaction failed on the wrong surface".into());
     }
@@ -332,7 +341,12 @@ fn assert_transaction_error(
         ValidationError::Surface(SurfaceError::Data {
             source: DataError::InvalidPointer(_),
             ..
-        }) => "ValidationError",
+        })
+        | ValidationError::Catalog(_)
+        | ValidationError::InvalidComponentId { .. }
+        | ValidationError::UnknownComponent { .. }
+        | ValidationError::UnallowedChild { .. }
+        | ValidationError::UnallowedParent { .. } => "ValidationError",
         ValidationError::Surface(SurfaceError::Data { .. }) => "DataError",
         ValidationError::MissingCatalog | ValidationError::UnknownCatalog(_) => "CatalogError",
         _ => return Err(format!("unexpected transaction failure: {error}").into()),
@@ -364,10 +378,25 @@ fn assert_transaction_error(
         if actual != renderer {
             return Err(format!("expected renderer error {renderer}, got {actual}").into());
         }
-    } else if path.is_some() {
-        return Err("transaction error expects a field path without a renderer envelope".into());
+        if let Some(details) = &details {
+            let error = &actual["error"];
+            let observed = json!([{
+                "code": error["code"], "path": error["path"], "surfaceId": error["surfaceId"]
+            }]);
+            if &observed != details {
+                return Err(
+                    format!("expected validation details {details}, got {observed}").into(),
+                );
+            }
+        }
+        envelope = Some(actual);
+    } else if path.is_some() || details.is_some() {
+        return Err("transaction error expects field details without a renderer envelope".into());
     }
-    assert_rejection(&Value::Object(core), category, None, &message)
+    let renderer_code = envelope
+        .as_ref()
+        .and_then(|actual| actual["error"]["code"].as_str());
+    assert_rejection(&Value::Object(core), category, renderer_code, &message)
 }
 
 fn execute_catalog(upstream: &Path, case: &Case, common: &Value) -> Result<(), TestError> {

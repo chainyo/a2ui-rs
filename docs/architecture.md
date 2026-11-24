@@ -74,6 +74,9 @@ Unknown surfaces, dangling child references, and orphaned components also give `
 Component cycles give `RECURSION_LIMIT_EXCEEDED`.
 Missing and unknown catalogs give `CATALOG_NOT_FOUND`.
 An invalid data pointer gives `VALIDATION_FAILED` at `/path`.
+An invalid component field gives `VALIDATION_FAILED` at that field in the incoming batch.
+Composition failures give `UNALLOWED_PARENT` or `UNALLOWED_CHILD`.
+When the rejected batch includes only one side of a relationship, the path points to that side.
 Other data model write errors give `DATA_ERROR`.
 
 ## Data model

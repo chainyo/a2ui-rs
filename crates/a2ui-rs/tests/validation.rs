@@ -98,6 +98,67 @@ fn catalog_rejects_an_unavailable_resource_in_common_types() -> Result<(), Box<d
 }
 
 #[test]
+fn field_errors_use_locations_in_the_rejected_update() -> Result<(), Box<dyn Error>> {
+    let common = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/upstream/specification/v1_0/json/common_types.json");
+    let common = serde_json::from_slice(&fs::read(common)?)?;
+    let Fixture {
+        mut catalog,
+        messages,
+        ..
+    } = serde_json::from_str(include_str!(
+        "../../../fixtures/local/catalog-topology.json"
+    ))?;
+    let mut other_stack = catalog["components"]["Stack"].clone();
+    other_stack["properties"]["component"]["const"] = json!("OtherStack");
+    catalog["components"]["OtherStack"] = other_stack;
+    let mut session = RoutingSession::new(RpcHandler::default(), LocalFunctions::default());
+    session.add_catalog(Catalog::from_json(catalog, &common)?)?;
+    let now = Instant::now();
+    let surface = "checkout";
+    session.mount_tree(surface);
+    let [create, ..] = messages;
+    session.receive(create, now)?;
+    assert!(session.advance(now, None).errors.is_empty());
+    let before = session.processor().get(surface).cloned();
+    assert!(before.is_some());
+
+    for (component, code, pointer) in [
+        (
+            json!({"id": "summary", "component": "Stack", "slots": []}),
+            "UNALLOWED_CHILD",
+            "/components/0",
+        ),
+        (
+            json!({"id": "root", "component": "OtherStack", "slots": ["summary"]}),
+            "UNALLOWED_PARENT",
+            "/components/0/slots/0",
+        ),
+        (
+            json!({"id": "summary", "component": "Summary", "text": "Total", "extra/~": true}),
+            "VALIDATION_FAILED",
+            "/components/0/extra~1~0",
+        ),
+    ] {
+        let update = serde_json::from_value(json!({
+            "version": "1.0",
+            "updateComponents": {"surfaceId": surface, "components": [component]}
+        }))?;
+        let Err(error) = session.receive(update, now) else {
+            return Err("expected component update to fail".into());
+        };
+        let envelope = serde_json::to_value(error.renderer_error_for_surface(surface))?;
+        assert_eq!(envelope["error"]["code"], code);
+        assert_eq!(envelope["error"]["surfaceId"], surface);
+        assert_eq!(envelope["error"]["path"], pointer);
+        let update = session.advance(now, None);
+        assert!(update.nodes.is_empty());
+        assert_eq!(session.processor().get(surface), before.as_ref());
+    }
+    Ok(())
+}
+
+#[test]
 fn rejected_self_reference_reports_the_surface_and_keeps_the_mounted_tree()
 -> Result<(), Box<dyn Error>> {
     let common_types = Path::new(env!("CARGO_MANIFEST_DIR"))
