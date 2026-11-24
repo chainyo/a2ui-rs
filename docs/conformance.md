@@ -110,7 +110,11 @@ The harness compares the surface before and after a rejected update.
 The duplicate-ID and cycle fixtures check rejection, rollback, and the renderer error envelope.
 The harness checks the error code, message, and surface ID.
 The invalid pointer and component validation cases also check field paths.
-The composition cases check paths for disallowed parents and child references.
+
+The composition cases check `Surface` as the implicit parent of the root.
+They compare error codes and field paths for disallowed parents and children.
+A rejected create leaves the surface absent. A rejected update preserves the existing surface.
+
 The catalog lookup cases check unknown catalog IDs and absent surface defaults.
 The incompatible catalog case checks registration rejection and the error for a v1.0 surface request.
 The incoming envelope cases check the field path or function call ID in the renderer error.
