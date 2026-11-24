@@ -409,6 +409,11 @@ impl RpcHandler {
                 call.name,
             )));
         }
+        if functions.action(catalog.id(), &call.name).is_some() {
+            return Err(invalid_error(ResolveError::ActionContextRequired(
+                call.name,
+            )));
+        }
         catalog.apply_function_defaults(&mut call);
         catalog
             .validate_function(&call)

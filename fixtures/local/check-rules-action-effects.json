@@ -1,0 +1,34 @@
+{
+  "create": {
+    "version": "1.0",
+    "createSurface": {
+      "surfaceId": "shipment",
+      "catalogId": "example:shipping",
+      "components": [
+        {
+          "id": "root",
+          "component": "TextField",
+          "label": "Postal code",
+          "value": "E1",
+          "@checks": [
+            {
+              "condition": {"@path": "postalCodeCheck"},
+              "message": "Enter the full postal code"
+            }
+          ]
+        }
+      ],
+      "dataModel": {"draft": {"attempts": 0, "postalCodeCheck": false}}
+    }
+  },
+  "action": {
+    "@call": "saveDraft",
+    "args": {
+      "steps": [
+        {"@call": "recordAttempt", "args": {"attempts": {"@path": "attempts"}}},
+        {"@call": "validateAddress"},
+        {"@call": "saveDraft"}
+      ]
+    }
+  }
+}

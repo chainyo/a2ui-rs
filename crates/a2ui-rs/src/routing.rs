@@ -15,8 +15,10 @@ use crate::protocol::{
 use crate::resolution::{DataScope, LocalFunctions, to_boolean};
 use crate::rpc::{Outbound, PendingCall, ReceiveError, RpcHandler};
 
+mod check;
 mod evaluation;
 
+pub use check::{ValidationResult, ValidationSeverity};
 use evaluation::Tick;
 
 const CACHE_LIMIT: usize = 256;
@@ -230,6 +232,26 @@ impl<'f> RoutingSession<'f> {
         self.mount(surface, scope, Task::Check(condition))
     }
 
+    /// Mounts one component check rule by its index in the component's check list.
+    ///
+    /// Use the data scope of the component instance. Later component updates replace the rule.
+    pub fn mount_check_rule(
+        &mut self,
+        surface: &str,
+        scope: DataScope,
+        component: &str,
+        index: usize,
+    ) -> EvaluationId {
+        self.mount(
+            surface,
+            scope,
+            Task::CheckRule {
+                component: component.to_owned(),
+                index,
+            },
+        )
+    }
+
     /// Queues one function action.
     pub fn run_action(
         &mut self,
@@ -276,6 +298,7 @@ impl<'f> RoutingSession<'f> {
                 scope,
                 task,
                 outcome: EvaluationState::Pending,
+                validation_result: None,
                 reported: false,
                 slots: BTreeMap::new(),
                 diagnostics: BTreeMap::new(),
@@ -296,11 +319,23 @@ impl<'f> RoutingSession<'f> {
         self.evaluations.get(&id).map(|entry| &entry.outcome)
     }
 
+    /// Returns the result for a mounted check rule after evaluation.
+    #[must_use]
+    pub fn validation_result(&self, id: EvaluationId) -> Option<&ValidationResult> {
+        self.evaluations.get(&id)?.validation_result.as_ref()
+    }
+
     /// Returns the current value. A pending check passes until its answer arrives.
     #[must_use]
     pub fn value(&self, id: EvaluationId) -> Option<Value> {
         let entry = self.evaluations.get(&id)?;
         Some(match (&entry.task, &entry.outcome) {
+            (Task::CheckRule { .. }, _) => Value::Bool(
+                entry
+                    .validation_result
+                    .as_ref()
+                    .is_none_or(|result| result.valid),
+            ),
             (Task::Check(_), EvaluationState::Ready(value)) => Value::Bool(to_boolean(value)),
             (_, EvaluationState::Ready(value)) => value.clone(),
             (Task::Check(_), EvaluationState::Pending | EvaluationState::Cancelled) => {
@@ -356,18 +391,27 @@ impl<'f> RoutingSession<'f> {
         };
         let mut update = RoutingUpdate::default();
         let mut reported_calls = BTreeSet::new();
-        for (&id, evaluation) in &mut self.evaluations {
-            if evaluation.task.imperative()
-                && evaluation.reported
-                && evaluation.outcome != EvaluationState::Pending
+        for imperative in [true, false] {
+            for (&id, evaluation) in self
+                .evaluations
+                .iter_mut()
+                .filter(|(_, entry)| entry.task.imperative() == imperative)
             {
-                continue;
-            }
-            let previous = evaluation.outcome.clone();
-            let (outcome, diagnostics) = tick.evaluate(evaluation);
-            if !evaluation.reported || previous != outcome {
-                update.changed.push(id);
-                if let EvaluationState::Failed(error) = &outcome
+                if evaluation.task.imperative()
+                    && evaluation.reported
+                    && evaluation.outcome != EvaluationState::Pending
+                {
+                    continue;
+                }
+                let previous = evaluation.outcome.clone();
+                let previous_check = evaluation.validation_result.take();
+                let (outcome, diagnostics) = tick.evaluate(evaluation);
+                let outcome_changed = !evaluation.reported || previous != outcome;
+                if outcome_changed || previous_check != evaluation.validation_result {
+                    update.changed.push(id);
+                }
+                if outcome_changed
+                    && let EvaluationState::Failed(error) = &outcome
                     && error
                         .function_call_id
                         .as_ref()
@@ -375,15 +419,15 @@ impl<'f> RoutingSession<'f> {
                 {
                     update.errors.push(error.clone().wire(&evaluation.surface));
                 }
-            }
-            for (key, error) in &diagnostics {
-                if evaluation.diagnostics.get(key) != Some(error) {
-                    update.errors.push(error.clone().wire(&evaluation.surface));
+                for (key, error) in &diagnostics {
+                    if evaluation.diagnostics.get(key) != Some(error) {
+                        update.errors.push(error.clone().wire(&evaluation.surface));
+                    }
                 }
+                evaluation.diagnostics = diagnostics;
+                evaluation.reported = true;
+                evaluation.outcome = outcome;
             }
-            evaluation.diagnostics = diagnostics;
-            evaluation.reported = true;
-            evaluation.outcome = outcome;
         }
         tick.state
             .surfaces
@@ -400,6 +444,10 @@ enum Task {
         property: String,
     },
     Check(Value),
+    CheckRule {
+        component: String,
+        index: usize,
+    },
     FunctionAction {
         call: Value,
         user_activated: bool,
@@ -436,6 +484,7 @@ struct Evaluation {
     scope: DataScope,
     task: Task,
     outcome: EvaluationState,
+    validation_result: Option<ValidationResult>,
     reported: bool,
     slots: BTreeMap<Path, Slot>,
     diagnostics: BTreeMap<Path, RoutingError>,

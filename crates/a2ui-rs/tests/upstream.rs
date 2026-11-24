@@ -52,6 +52,12 @@ struct Case {
     expect_error: Option<Value>,
     input: Option<Value>,
     args: Option<Value>,
+    #[serde(rename = "surfaceId")]
+    surface_id: Option<String>,
+    #[serde(rename = "actionPayload")]
+    action_payload: Option<Value>,
+    #[serde(rename = "expectDataModel")]
+    expect_data_model: Option<Value>,
     function: Option<String>,
     surface: Option<Value>,
     catalogs: Option<Value>,
