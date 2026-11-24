@@ -362,6 +362,22 @@ impl Catalog {
         let instance =
             serde_json::to_value(instance).map_err(|error| invalid(error.to_string()))?;
         validator.validate(&instance).map_err(|error| {
+            if matches!(error.kind(), ValidationErrorKind::Required { .. })
+                && let Some(extra) = validator.iter_errors(&instance).find(|extra| {
+                    matches!(
+                        extra.kind(),
+                        ValidationErrorKind::AdditionalProperties { .. }
+                            | ValidationErrorKind::UnevaluatedProperties { .. }
+                    ) && extra.instance_path() == error.instance_path()
+                })
+            {
+                let location = error.instance_path();
+                return CatalogError::InvalidPayload {
+                    name: name.to_owned(),
+                    message: format!("at '{location}': {}. {}", error.masked(), extra.masked()),
+                    path: base.map(|base| format!("{base}{location}")),
+                };
+            }
             let location = match error.kind() {
                 ValidationErrorKind::AdditionalProperties { unexpected }
                 | ValidationErrorKind::UnevaluatedProperties { unexpected }
