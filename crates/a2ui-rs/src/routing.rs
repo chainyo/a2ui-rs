@@ -268,6 +268,7 @@ impl<'f> RoutingSession<'f> {
             Task::CheckRule {
                 component: component.to_owned(),
                 index,
+                internal: false,
             },
         )
     }
@@ -429,7 +430,7 @@ impl<'f> RoutingSession<'f> {
                 let (outcome, diagnostics) = tick.evaluate(evaluation);
                 let outcome_changed = !evaluation.reported || previous != outcome;
                 if (outcome_changed || previous_check != evaluation.validation_result)
-                    && !matches!(evaluation.task, Task::Property { internal: true, .. })
+                    && !evaluation.task.internal()
                 {
                     update.changed.push(id);
                 }
@@ -473,6 +474,7 @@ enum Task {
     CheckRule {
         component: String,
         index: usize,
+        internal: bool,
     },
     FunctionAction {
         call: Value,
@@ -486,6 +488,13 @@ enum Task {
 }
 
 impl Task {
+    fn internal(&self) -> bool {
+        matches!(
+            self,
+            Self::Property { internal: true, .. } | Self::CheckRule { internal: true, .. }
+        )
+    }
+
     fn imperative(&self) -> bool {
         matches!(self, Self::FunctionAction { .. } | Self::Event { .. })
     }

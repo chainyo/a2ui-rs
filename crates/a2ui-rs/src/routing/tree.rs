@@ -18,6 +18,8 @@ mod action;
 
 pub use action::{ActionDispatchOptions, NodeActionError};
 
+const VALIDATION_PROPERTIES: [&str; 3] = ["isValid", "validationErrors", "validationResults"];
+
 /// Identifies one mounted node in a routing session.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NodeId(u64);
@@ -55,7 +57,7 @@ pub struct MountedNode {
     pub scope: DataScope,
     /// The component definition's `@metadata` envelope.
     pub metadata: Option<Metadata>,
-    /// The resolved properties, including child declarations.
+    /// The resolved properties, including child declarations and check results.
     pub properties: BTreeMap<String, MountedProperty>,
     /// The mounted children in order.
     pub children: Vec<MountedChild>,
@@ -173,8 +175,18 @@ impl MountedTrees {
             }
             let model = processor.get(surface);
             for (&id, entry) in &mut tree.entries {
+                let validation = entry
+                    .validation_properties(evaluations)
+                    .unwrap_or_else(|error| {
+                        update
+                            .errors
+                            .push(RoutingError::expression(error).wire(surface));
+                        Vec::new()
+                    });
                 let mounted = !entry.published;
-                if mounted || entry.next_children.is_some() || entry.properties_changed(evaluations)
+                if mounted
+                    || entry.next_children.is_some()
+                    || entry.properties_changed(evaluations, &validation)
                 {
                     let kind = if mounted {
                         NodeChangeKind::Mounted
@@ -186,7 +198,7 @@ impl MountedTrees {
                         id,
                         kind,
                     });
-                    entry.publish_properties(evaluations);
+                    entry.publish_properties(evaluations, validation);
                 }
 
                 let metadata = model
@@ -271,6 +283,9 @@ impl RoutingSession<'_> {
         for entry in entries.values() {
             for property in entry.evaluations.values() {
                 self.unmount(property.id);
+            }
+            for &check in entry.checks.iter().flatten() {
+                self.unmount(check);
             }
         }
         record_disposals(&mut self.trees.changes, surface, entries);
@@ -361,12 +376,17 @@ struct Entry {
     catalog_id: Option<String>,
     template_field: Option<String>,
     evaluations: BTreeMap<String, PropertyEvaluation>,
+    checks: Option<Vec<EvaluationId>>,
     published: bool,
     next_children: Option<Vec<MountedChild>>,
 }
 
 impl Entry {
-    fn publish_properties(&mut self, evaluations: &BTreeMap<EvaluationId, Evaluation>) {
+    fn publish_properties(
+        &mut self,
+        evaluations: &BTreeMap<EvaluationId, Evaluation>,
+        validation: Vec<(&str, Value)>,
+    ) {
         self.node.properties = self
             .evaluations
             .iter()
@@ -381,13 +401,36 @@ impl Entry {
                 )
             })
             .collect();
+        self.node
+            .properties
+            .extend(validation.into_iter().map(|(name, value)| {
+                (
+                    name.to_owned(),
+                    MountedProperty {
+                        value,
+                        binding_path: None,
+                        is_action: false,
+                    },
+                )
+            }));
         if let Some(children) = self.next_children.take() {
             self.node.children = children;
         }
     }
 
-    fn properties_changed(&self, evaluations: &BTreeMap<EvaluationId, Evaluation>) -> bool {
-        self.node.properties.len() != self.evaluations.len()
+    fn properties_changed(
+        &self,
+        evaluations: &BTreeMap<EvaluationId, Evaluation>,
+        validation: &[(&str, Value)],
+    ) -> bool {
+        self.node.properties.len() != self.evaluations.len() + validation.len()
+            || validation.iter().any(|(name, value)| {
+                self.node.properties.get(*name).is_none_or(|property| {
+                    property.binding_path.is_some()
+                        || property.is_action
+                        || &property.value != value
+                })
+            })
             || self.evaluations.iter().any(|(name, property)| {
                 self.node.properties.get(name).is_none_or(|previous| {
                     previous.is_action != property.is_action
@@ -395,6 +438,34 @@ impl Entry {
                         || &previous.value != property.value(evaluations)
                 })
             })
+    }
+
+    fn validation_properties(
+        &self,
+        evaluations: &BTreeMap<EvaluationId, Evaluation>,
+    ) -> Result<Vec<(&'static str, Value)>, serde_json::Error> {
+        let Some(checks) = &self.checks else {
+            return Ok(Vec::new());
+        };
+        let failed: Vec<_> = checks
+            .iter()
+            .filter_map(|id| evaluations.get(id)?.validation_result.as_ref())
+            .filter(|result| !result.valid)
+            .collect();
+        let mut valid = true;
+        let mut messages = Vec::new();
+        for result in failed.iter().copied().filter(|result| result.is_blocking()) {
+            valid = false;
+            if let Some(message) = &result.message {
+                messages.push(Value::String(message.clone()));
+            }
+        }
+        let [is_valid, errors, results] = VALIDATION_PROPERTIES;
+        Ok(vec![
+            (is_valid, Value::Bool(valid)),
+            (errors, Value::Array(messages)),
+            (results, serde_json::to_value(failed)?),
+        ])
     }
 }
 
@@ -417,6 +488,7 @@ struct Definition {
     component: String,
     catalog_id: Option<String>,
     properties: BTreeMap<String, PropertyDefinition>,
+    check_count: Option<usize>,
     children: Vec<ChildDefinition>,
 }
 
@@ -447,10 +519,16 @@ fn definitions(
             });
             let checks =
                 catalog.and_then(|catalog| catalog.component_checks(component).ok().flatten());
+            let check_count = checks.and_then(Value::as_array).map(Vec::len);
             let properties = component
                 .properties
                 .iter()
-                .filter(|(_, value)| !checks.is_some_and(|checks| std::ptr::eq(checks, *value)))
+                .filter(|(name, value)| {
+                    let check_list = checks.is_some_and(|checks| std::ptr::eq(checks, *value));
+                    let derived =
+                        check_count.is_some() && VALIDATION_PROPERTIES.contains(&name.as_str());
+                    !(check_list || derived)
+                })
                 .map(|(name, value)| {
                     let kind = payload
                         .get(name)
@@ -497,6 +575,7 @@ fn definitions(
                     component: component.component.clone(),
                     catalog_id: catalog_id.map(str::to_owned),
                     properties,
+                    check_count,
                     children,
                 },
             )
@@ -537,6 +616,7 @@ impl Reconcile<'_> {
             .and_then(|id| self.previous.remove(&id))
             .unwrap_or_else(|| self.new_entry(component_id, definition, scope, template_field));
         self.mount_properties(&mut entry, definition);
+        self.mount_checks(&mut entry, definition.check_count);
 
         let children = self.children(&entry, definition);
         entry.next_children = (entry.node.children != children).then_some(children);
@@ -625,9 +705,32 @@ impl Reconcile<'_> {
             catalog_id: definition.catalog_id.clone(),
             template_field: template_field.map(str::to_owned),
             evaluations: BTreeMap::new(),
+            checks: None,
             published: false,
             next_children: None,
         }
+    }
+
+    fn mount_checks(&mut self, entry: &mut Entry, check_count: Option<usize>) {
+        let mut checks = entry.checks.take().unwrap_or_default();
+        let count = check_count.unwrap_or_default();
+        for id in checks.drain(count.min(checks.len())..) {
+            self.evaluations.remove(&id);
+        }
+        for index in checks.len()..count {
+            checks.push(Evaluation::mount(
+                self.evaluations,
+                self.next_evaluation,
+                self.surface,
+                entry.node.scope.clone(),
+                Task::CheckRule {
+                    component: entry.node.component_id.clone(),
+                    index,
+                    internal: true,
+                },
+            ));
+        }
+        entry.checks = check_count.map(|_| checks);
     }
 
     fn mount_properties(&mut self, entry: &mut Entry, definition: &Definition) {

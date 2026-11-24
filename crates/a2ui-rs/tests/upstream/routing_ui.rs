@@ -277,39 +277,26 @@ pub(super) fn execute_check_metadata(upstream: &Path, case: &Case) -> Result<(),
     let mut session = RoutingSession::new(RpcHandler::default(), LocalFunctions::default());
     session.add_catalog(Catalog::from_json(catalog, &common)?)?;
     let now = Instant::now();
+    session.mount_tree(surface);
     receive(&mut session, message.clone(), now)?;
+    let update = session.advance(now, None);
+    if !update.errors.is_empty() {
+        return Err(format!("unexpected check errors: {:?}", update.errors).into());
+    }
     let expected = &case.expect.as_ref().ok_or("missing expectations")?["surfaces"][surface];
-    for component in create["components"]
-        .as_array()
-        .ok_or("missing components")?
-    {
-        let id = component["id"].as_str().ok_or("missing component ID")?;
-        let checks = component["@checks"].as_array().ok_or("missing rules")?;
-        let mounted: Vec<_> = (0..checks.len())
-            .map(|index| session.mount_check_rule(surface, DataScope::default(), id, index))
-            .collect();
-        let update = session.advance(now, None);
-        if !update.errors.is_empty() {
-            return Err(format!("unexpected check errors: {:?}", update.errors).into());
-        }
-        let results: Vec<_> = mounted
-            .into_iter()
-            .map(|check| {
-                session
-                    .validation_result(check)
-                    .ok_or("missing validation result")
-            })
-            .collect::<Result<_, _>>()?;
-        let errors: Vec<_> = results
-            .iter()
-            .filter(|result| result.is_blocking())
-            .filter_map(|result| result.message.as_deref())
-            .collect();
-        if serde_json::to_value(&results)? != expected["validationResults"][id]
-            || json!(errors) != expected["validationErrors"][id]
-            || json!(!results.iter().any(|result| result.is_blocking())) != expected["isValid"][id]
-        {
-            return Err(format!("unexpected check results for {id}: {results:?}").into());
+    let tree = session.node_tree(surface).ok_or("missing mounted tree")?;
+    let root = tree
+        .root()
+        .and_then(|id| tree.node(id))
+        .ok_or("missing mounted root")?;
+    for name in ["isValid", "validationErrors", "validationResults"] {
+        let value = &root
+            .properties
+            .get(name)
+            .ok_or("missing validation property")?
+            .value;
+        if value != &expected[name][&root.component_id] {
+            return Err(format!("unexpected {name} on {}: {value}", root.component_id).into());
         }
     }
     Ok(())
