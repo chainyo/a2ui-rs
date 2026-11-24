@@ -18,6 +18,8 @@ use serde_json::Value;
 
 #[path = "upstream/accessibility.rs"]
 mod accessibility;
+#[path = "upstream/events.rs"]
+mod events;
 #[path = "upstream/nodes.rs"]
 mod nodes;
 #[path = "upstream/resolution.rs"]
@@ -62,6 +64,10 @@ struct Case {
     surface_id: Option<String>,
     #[serde(rename = "actionPayload")]
     action_payload: Option<Value>,
+    #[serde(rename = "sourceComponentId")]
+    source_component_id: Option<String>,
+    scope: Option<String>,
+    metadata: Option<Value>,
     #[serde(rename = "userActivation")]
     user_activation: Option<bool>,
     #[serde(rename = "expectDispatched")]
@@ -240,7 +246,11 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
-    if accessibility::supports(suite, case) {
+    if events::missing_event_name(suite, case) {
+        Some(
+            "Catalog validation rejects the missing name. The fixture expects INVALID_ACTION at dispatch.",
+        )
+    } else if accessibility::supports(suite, case) {
         Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")
     } else if suite == "core/validation_result.yaml"
         && case.name == "test_validation_result_multiple_rules_preserve_order"
@@ -255,6 +265,7 @@ fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
 
 fn supports_case(suite: &str, case: &Case) -> bool {
     if accessibility::supports(suite, case)
+        || events::supports(suite, case)
         || nodes::supports(suite, case)
         || validation::supports(suite, case)
         || resolution::supports(suite, case)
@@ -305,6 +316,8 @@ fn supports_case(suite: &str, case: &Case) -> bool {
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     if accessibility::supports(suite, case) {
         accessibility::execute(upstream, case)
+    } else if events::supports(suite, case) {
+        events::execute(upstream, case)
     } else if nodes::supports(suite, case) {
         nodes::execute(upstream, case)
     } else if validation::supports(suite, case) {
