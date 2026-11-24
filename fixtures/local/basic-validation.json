@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "billing",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {"email": "billing@example.c", "confirmed": true},
+    "components": [
+      {
+        "id": "root",
+        "component": "TextField",
+        "label": "Billing email",
+        "value": {"@path": "/email"},
+        "@checks": [
+          {"condition": {"@call": "email", "args": {"value": {"@path": "/email"}}}},
+          {
+            "condition": {
+              "@call": "and",
+              "args": {
+                "values": [
+                  {"@call": "email", "args": {"value": {"@path": "/email"}}},
+                  {"@path": "/confirmed"}
+                ]
+              }
+            },
+            "message": "Confirm a valid billing email"
+          }
+        ]
+      }
+    ]
+  }
+}
