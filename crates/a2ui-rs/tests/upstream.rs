@@ -251,9 +251,13 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
-    if events::missing_event_name(suite, case) {
+    if rpc::activation_fixture(suite, case) {
         Some(
-            "Catalog validation rejects the missing name. The fixture expects INVALID_ACTION at dispatch.",
+            "Verified catalog rejection and local user activation. The fixture declares agent-callable activation, which v1.0 forbids.",
+        )
+    } else if routing::non_json_argument_fixture(suite, case) {
+        Some(
+            "Verified that non-finite arguments cannot enter the JSON protocol. The fixture expects a later routing diagnostic.",
         )
     } else if accessibility::supports(suite, case) {
         Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")

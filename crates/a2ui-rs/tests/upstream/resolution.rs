@@ -86,6 +86,7 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                         | "test_expression_parser_data_type_coercion_matrix"
                         | "test_expression_parser_syntax_error_unclosed_brace"
                         | "test_expression_parser_max_depth_exceeded_error"
+                        | "test_expression_parser_nested_function_call"
                 )))
 }
 
@@ -93,6 +94,7 @@ fn is_formatting_case(name: &str) -> bool {
     matches!(
         name,
         "test_function_format_date_tr35_tokens"
+            | "test_expression_parser_nested_function_call"
             | "test_function_format_currency_locale_and_symbol"
             | "test_function_pluralize_categories"
             | "test_evaluate_function_format_date_keeps_written_offset"

@@ -239,6 +239,12 @@ impl Tick<'_, '_, '_> {
         metadata: Option<&Metadata>,
         progress: &mut EventProgress,
     ) -> EvalResult {
+        if event.name.is_empty() {
+            return Err(RoutingError::new(
+                "INVALID_ACTION",
+                "Action event requires a name",
+            ));
+        }
         let location = Location::default();
         let kinds = BTreeMap::new();
         for (index, (key, value)) in event.context.iter().enumerate().skip(progress.completed) {

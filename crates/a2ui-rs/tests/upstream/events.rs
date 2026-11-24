@@ -21,32 +21,46 @@ fn is_v1_action(suite: &str, case: &Case) -> bool {
         && case.protocol_version.as_deref() == Some("1.0")
 }
 
-pub(super) fn missing_event_name(suite: &str, case: &Case) -> bool {
-    is_v1_action(suite, case) && case.name == "test_action_event_missing_name_error"
-}
-
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
-    missing_event_name(suite, case)
-        || (is_v1_action(suite, case)
-            && matches!(
-                case.name.as_str(),
-                "test_action_event_with_dispatch_metadata"
-                    | "test_action_event_without_dispatch_metadata_has_none"
-                    | "test_action_event_dispatch_metadata_invalid_uax31_key_error"
-                    | "test_action_v10_event_with_at_path_and_at_call_context"
-                    | "test_action_v10_event_context_literal_path_and_call_keys"
-                    | "test_action_event_non_string_user_message_error"
-            ))
+    if is_v1_action(suite, case) {
+        return matches!(
+            case.name.as_str(),
+            "test_action_event_missing_name_error"
+                | "test_action_event_with_dispatch_metadata"
+                | "test_action_event_without_dispatch_metadata_has_none"
+                | "test_action_event_dispatch_metadata_invalid_uax31_key_error"
+                | "test_action_v10_event_with_at_path_and_at_call_context"
+                | "test_action_v10_event_context_literal_path_and_call_keys"
+                | "test_action_event_non_string_user_message_error"
+        );
+    }
+    suite == "core/actions.yaml"
+        && case.action == "dispatch_action"
+        && case.protocol_version.is_none()
+        && matches!(
+            case.name.as_str(),
+            "test_action_event_basic"
+                | "test_action_event_with_literal_context"
+                | "test_action_event_context_literal_keys_path_and_call"
+                | "test_action_event_with_data_binding"
+                | "test_action_event_with_relative_scope"
+                | "test_action_event_with_user_message"
+        )
 }
 
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let surface = case.surface_id.as_deref().unwrap_or("actions");
-    let source = case.source_component_id.as_deref().unwrap_or("root");
-    let payload = case
-        .action_payload
-        .as_ref()
-        .ok_or("missing event payload")?;
-    let (components, index) = layout(source, case.scope.as_deref(), payload)?;
+    let source = case
+        .source_component_id
+        .as_deref()
+        .unwrap_or(if case.scope.is_some() {
+            "button"
+        } else {
+            "root"
+        });
+    let payload = case.action_payload.clone().ok_or("missing event payload")?;
+    let payload = v1_payload(case, payload)?;
+    let (components, index) = layout(source, case.scope.as_deref(), &payload)?;
     let common = serde_json::from_slice(&fs::read(
         upstream.join("specification/v1_0/json/common_types.json"),
     )?)?;
@@ -65,8 +79,9 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let now = Instant::now();
     let received = session.receive(create_message(&create)?, now);
 
+    let missing_name = case.name == "test_action_event_missing_name_error";
     let invalid_message = case.name == "test_action_event_non_string_user_message_error";
-    if missing_event_name("core/actions.yaml", case) || invalid_message {
+    if missing_name || invalid_message {
         let expected = case
             .expect_error
             .as_ref()
@@ -82,14 +97,12 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
             return Err(format!("unexpected result at catalog validation: {received:?}").into());
         }
         assert_no_event(&mut session, now)?;
-        if invalid_message {
-            create
-                .as_object_mut()
-                .ok_or("missing create payload")?
-                .remove("components");
-            session.receive(create_message(&create)?, now)?;
-            assert_invalid_user_message(&mut session, case, surface, source, payload, now)?;
-        }
+        create
+            .as_object_mut()
+            .ok_or("missing create payload")?
+            .remove("components");
+        session.receive(create_message(&create)?, now)?;
+        assert_invalid_event(&mut session, case, surface, source, &payload, now)?;
         return Ok(());
     }
     received?;
@@ -197,7 +210,7 @@ fn create_message(create: &Value) -> Result<AgentToRendererMessage, TestError> {
     )?)
 }
 
-fn assert_invalid_user_message(
+fn assert_invalid_event(
     session: &mut RoutingSession<'_>,
     case: &Case,
     surface: &str,
@@ -215,9 +228,10 @@ fn assert_invalid_user_message(
         surface,
         DataScope::default(),
         EventAction {
-            name: event["name"]
-                .as_str()
-                .ok_or("missing event name")?
+            name: event
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
                 .to_owned(),
             source_component_id: source.to_owned(),
             timestamp: TIMESTAMP.to_owned(),
@@ -247,6 +261,24 @@ fn assert_invalid_user_message(
         return Err(format!("unexpected event dispatch result: {actual}").into());
     }
     assert_no_event(session, now)
+}
+
+fn v1_payload(case: &Case, mut payload: Value) -> Result<Value, TestError> {
+    if matches!(
+        case.name.as_str(),
+        "test_action_event_with_data_binding" | "test_action_event_with_relative_scope"
+    ) {
+        // The unversioned fixtures use the old binding key.
+        let context = payload["event"]["context"]
+            .as_object_mut()
+            .ok_or("missing action context")?;
+        for value in context.values_mut() {
+            if let Some(path) = value.get("path") {
+                *value = json!({"@path": path});
+            }
+        }
+    }
+    Ok(payload)
 }
 
 fn layout(

@@ -23,8 +23,12 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         || ui::supports_open_url(suite, case)
         || (suite == "core/agent_function_routing.yaml"
             && case.action == "route_agent_function"
-            && case.protocol_version.as_deref() == Some("1.0")
-            && case.name != "test_agent_routing_non_json_argument_fails_locally")
+            && case.protocol_version.as_deref() == Some("1.0"))
+}
+
+pub(super) fn non_json_argument_fixture(suite: &str, case: &Case) -> bool {
+    suite == "core/agent_function_routing.yaml"
+        && case.name == "test_agent_routing_non_json_argument_fails_locally"
 }
 
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
@@ -39,6 +43,9 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
             return ui::execute_open_url(upstream, case);
         }
         return ui::execute_local_action(upstream, case);
+    }
+    if non_json_argument_fixture("core/agent_function_routing.yaml", case) {
+        return assert_non_json_arguments(case);
     }
     let mut session = build_session(upstream, case)?;
     let now = Instant::now();
@@ -91,6 +98,51 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         driver
             .step(step, context)
             .map_err(|error| format!("step {}: {error}", index + 1))?;
+    }
+    Ok(())
+}
+
+fn assert_non_json_arguments(case: &Case) -> Result<(), TestError> {
+    let [binding, action] = case.steps.as_slice() else {
+        return Err("expected a binding and a function action".into());
+    };
+    if binding["as"] != Value::Null
+        || binding["expectValues"] != json!([null])
+        || action["as"] != "action"
+    {
+        return Err("unexpected non-finite fixture steps".into());
+    }
+    for (step, literal) in [(binding, "NaN"), (action, "Infinity")] {
+        let call = &step["evaluate"];
+        let name = call["@call"].as_str().ok_or("missing function name")?;
+        let token = call["args"]["amount"]
+            .as_str()
+            .ok_or("missing non-finite argument")?;
+        let mut options = serde_saphyr::Options::default();
+        options.non_finite_float_policy = serde_saphyr::NonFiniteFloatPolicy::PassThrough;
+        let value: f64 = serde_saphyr::from_str_with_options(token, options)?;
+        let expected = json!([{ "code": "EXPRESSION_ERROR", "message": name }]);
+        if value.is_finite()
+            || serde_json::Number::from_f64(value).is_some()
+            || step["expectErrors"] != expected
+            || (literal == "NaN") != value.is_nan()
+        {
+            return Err(format!("unexpected non-JSON fixture argument {token}").into());
+        }
+        let catalog = case.surface.as_ref().ok_or("missing surface")?["catalogId"].clone();
+        let wire = json!({
+            "version": "1.0",
+            "callAgentFunction": {
+                "surfaceId": "main", "functionCallId": "non-json",
+                "callFunction": {"@call": name, "catalogId": catalog, "args": {"amount": 123}}
+            }
+        })
+        .to_string();
+        serde_json::from_str::<RendererToAgentMessage>(&wire)?;
+        let invalid = wire.replace(r#""amount":123"#, &format!(r#""amount":{literal}"#));
+        if serde_json::from_str::<RendererToAgentMessage>(&invalid).is_ok() {
+            return Err(format!("accepted an RPC argument with no JSON form: {literal}").into());
+        }
     }
     Ok(())
 }
