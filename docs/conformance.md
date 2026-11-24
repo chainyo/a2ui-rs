@@ -70,7 +70,9 @@ git ls-tree HEAD fixtures/upstream
 
 The checkout contains the protocol specifications, SDK blueprints, catalogs, examples, and complete upstream conformance suites.
 The tests use v1.0 references and classify dedicated legacy suites outside scope.
-For Data Model and Data Context cases without a case version, the harness uses the catalog version.
+For Catalog, Data Model, and Data Context cases without a case version, the harness uses the catalog version.
+The harness also excludes fixtures that require successful use of a pre-v1.0 message, action format, or data model query.
+Rejection of an older message or catalog remains part of v1.0 coverage.
 Upstream files retain their own license notices. Do not edit them inside this repository.
 
 Install Git before you run the inventory test. The test uses local Git metadata.

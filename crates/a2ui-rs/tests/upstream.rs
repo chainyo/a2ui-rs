@@ -144,12 +144,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                     format!("missing or duplicate case name in {}", suite.display()).into(),
                 );
             }
-            let version = case_protocol_version(&suite_name, &case);
-            let (status, reason) = if is_legacy_suite(suite)
-                || matches!(
-                    version,
-                    Some("0.8" | "v0.8" | "0.9" | "v0.9" | "0.9.1" | "v0.9.1")
-                ) {
+            let (status, reason) = if is_legacy_suite(suite) || is_legacy_case(&suite_name, &case) {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
@@ -602,9 +597,54 @@ fn git_output(directory: &Path, arguments: &[&str]) -> Result<String, TestError>
     Ok(String::from_utf8(output.stdout)?)
 }
 
+fn is_legacy_case(suite: &str, case: &Case) -> bool {
+    if is_legacy_version(case_protocol_version(suite, case)) {
+        return true;
+    }
+    match (suite, case.name.as_str()) {
+        ("core/catalog.yaml", "test_catalog_from_json_override_catalog_id")
+            if case.protocol_version.is_none() =>
+        {
+            is_legacy_version(
+                case.expect
+                    .as_ref()
+                    .and_then(|expect| expect["protocolVersion"].as_str()),
+            )
+        }
+        ("core/actions.yaml", "test_action_direct_name_shorthand") => {
+            case.protocol_version.is_none()
+        }
+        (
+            "core/node_resolution.yaml",
+            "component_type_change_replaces_node" | "delete_surface_disposes_tree",
+        ) => case
+            .steps
+            .iter()
+            .filter_map(|step| step["messages"].as_array())
+            .flatten()
+            .any(|message| is_legacy_version(message["version"].as_str())),
+        (
+            "core/message_processor_v1_0.yaml",
+            "test_v10_get_renderer_data_model_excludes_surface_without_default_from_v09"
+            | "test_v10_get_renderer_data_model_filters_by_surface_protocol_version",
+        ) => is_legacy_version(case.args.as_ref().and_then(|args| args["version"].as_str())),
+        _ => false,
+    }
+}
+
+fn is_legacy_version(version: Option<&str>) -> bool {
+    matches!(
+        version,
+        Some("0.8" | "v0.8" | "0.9" | "v0.9" | "0.9.1" | "v0.9.1")
+    )
+}
+
 fn case_protocol_version<'a>(suite: &str, case: &'a Case) -> Option<&'a str> {
     case.protocol_version.as_deref().or_else(|| {
-        if matches!(suite, "core/data_model.yaml" | "core/data_context.yaml") {
+        if matches!(
+            suite,
+            "core/catalog.yaml" | "core/data_model.yaml" | "core/data_context.yaml"
+        ) {
             case.catalog.as_ref()?.get("protocolVersion")?.as_str()
         } else {
             None
@@ -672,7 +712,7 @@ fn dedicated_legacy_suites_remain_outside_scope() {
 }
 
 #[test]
-fn data_suite_catalog_versions_apply_when_the_case_omits_its_version() -> Result<(), TestError> {
+fn catalog_versions_apply_when_the_case_omits_its_version() -> Result<(), TestError> {
     let cases = parse_cases(
         r#"
 - name: legacy_data
@@ -684,7 +724,11 @@ fn data_suite_catalog_versions_apply_when_the_case_omits_its_version() -> Result
     protocolVersion: "v0.9"
 "#,
     )?;
-    for suite in ["core/data_model.yaml", "core/data_context.yaml"] {
+    for suite in [
+        "core/catalog.yaml",
+        "core/data_model.yaml",
+        "core/data_context.yaml",
+    ] {
         assert_eq!(case_protocol_version(suite, &cases[0]), Some("v0.9"));
         assert_eq!(case_protocol_version(suite, &cases[1]), Some("1.0"));
     }
