@@ -10,6 +10,11 @@ use serde_json::{Value, json};
 use super::{Case, TestError, assert_surface_components};
 
 fn supports_transaction(suite: &str, case: &Case) -> bool {
+    if suite == "core/error_responses.yaml" {
+        return case.action == "validate"
+            && case.protocol_version.as_deref() == Some("1.0")
+            && case.name == "test_error_response_create_surface_unknown_catalog_id";
+    }
     suite == super::SURFACE_SUITE
         && case.action == "process_messages"
         && case.protocol_version.as_deref() == Some("1.0")
@@ -24,6 +29,11 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
                 | "test_v10_call_validation_config_leaves_out_rules_as_strict"
                 | "test_composition_constraints_preserved_on_partial_parent_update"
                 | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
+                | "test_v10_component_without_catalog_id_on_surface_without_default_errors"
+                | "test_v10_component_without_catalog_id_errors_with_a_single_catalog"
+                | "test_v10_function_call_naming_unknown_catalog_errors"
+                | "test_v10_call_naming_unknown_catalog_errors_without_strict_mode"
+                | "test_v10_function_call_with_empty_catalog_id_errors"
         )
 }
 
@@ -137,6 +147,14 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             processor.add_catalog(Catalog::from_json(basic.clone(), &common)?)?;
         }
     }
+    if transaction && let Some(catalogs) = &case.catalogs {
+        for document in catalogs.as_array().ok_or("expected transaction catalogs")? {
+            processor.add_catalog(Catalog::from_json(
+                catalog_document(case, document)?,
+                &common,
+            )?)?;
+        }
+    }
     if let Some(document) = &case.catalog {
         let mut document = catalog_document(case, document)?;
         if case.name.starts_with("test_composition_") {
@@ -147,9 +165,9 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         processor.add_catalog(Catalog::from_json(document, &common)?)?;
     }
 
-    if let Some(messages) = &case.messages {
-        if !case.steps.is_empty() {
-            return Err("validation fixture has both messages and steps".into());
+    if let Some(messages) = case.messages.as_ref().or(case.payload.as_ref()) {
+        if !case.steps.is_empty() || (case.messages.is_some() && case.payload.is_some()) {
+            return Err("validation fixture has more than one message source".into());
         }
         return apply_messages(
             &mut processor,
@@ -289,6 +307,7 @@ fn assert_transaction_error(
         | ValidationError::CircularReference(_)
         | ValidationError::Orphan(_) => "IntegrityError",
         ValidationError::DanglingReference { .. } => "ValidationError",
+        ValidationError::MissingCatalog | ValidationError::UnknownCatalog(_) => "CatalogError",
         _ => return Err(format!("unexpected transaction failure: {error}").into()),
     };
     if let Some(mut renderer) = renderer {

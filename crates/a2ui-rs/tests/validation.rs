@@ -150,3 +150,48 @@ fn rejected_self_reference_reports_the_surface_and_keeps_the_mounted_tree()
     assert_eq!(session.node_tree(surface).and_then(NodeTree::root), root);
     Ok(())
 }
+
+#[test]
+fn nested_catalog_lookup_reports_the_surface_and_keeps_the_previous_definition()
+-> Result<(), Box<dyn Error>> {
+    let upstream = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/upstream");
+    let common = serde_json::from_slice(&fs::read(
+        upstream.join("specification/v1_0/json/common_types.json"),
+    )?)?;
+    let catalog =
+        serde_json::from_slice(&fs::read(upstream.join("catalogs/basic/v1/catalog.json"))?)?;
+    let mut session = RoutingSession::new(RpcHandler::default(), LocalFunctions::default());
+    session.add_catalog(Catalog::from_json(catalog, &common)?)?;
+    let [create, missing, unknown]: [AgentToRendererMessage; 3] = serde_json::from_str(
+        include_str!("../../../fixtures/local/catalog-lookup-errors.json"),
+    )?;
+    let now = Instant::now();
+    let surface = "shipment";
+    session.mount_tree(surface);
+    session.receive(create, now)?;
+    assert!(session.advance(now, None).errors.is_empty());
+    let before = session.processor().get(surface).cloned();
+    assert!(before.is_some());
+
+    for (message, expected) in [
+        (missing, "Surface has no default catalogId"),
+        (unknown, "Catalog not found: example:shipping"),
+    ] {
+        let Err(error) = session.receive(message, now) else {
+            return Err("expected the nested catalog lookup to fail".into());
+        };
+        assert_eq!(
+            serde_json::to_value(error.renderer_error_for_surface(surface))?,
+            json!({"version": "1.0", "error": {
+                "code": "CATALOG_NOT_FOUND",
+                "surfaceId": surface,
+                "message": expected
+            }})
+        );
+        let update = session.advance(now, None);
+        assert!(update.nodes.is_empty());
+        assert!(update.errors.is_empty());
+        assert_eq!(session.processor().get(surface), before.as_ref());
+    }
+    Ok(())
+}

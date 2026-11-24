@@ -485,10 +485,10 @@ pub enum ValidationError {
     #[error("Catalog '{0}' is already registered")]
     DuplicateCatalog(String),
     /// The component or function names no catalog and the surface has no default.
-    #[error("No catalog ID or surface default")]
+    #[error("Surface has no default catalogId")]
     MissingCatalog,
     /// The catalog ID is unknown.
-    #[error("Unknown catalog '{0}'")]
+    #[error("Catalog not found: {0}")]
     UnknownCatalog(String),
     /// The graph has no root.
     #[error("Missing root component")]
@@ -552,7 +552,7 @@ pub enum ValidationError {
 }
 
 impl ValidationError {
-    /// Builds a renderer error for duplicate component IDs and component cycles.
+    /// Builds a renderer error for duplicate component IDs, component cycles, or catalog lookup failures.
     ///
     /// Supply the surface ID from the rejected message.
     /// Returns `None` for other validation failures.
@@ -561,6 +561,7 @@ impl ValidationError {
         let code = match self {
             Self::Surface(SurfaceError::DuplicateComponent(_)) => "INTEGRITY_ERROR",
             Self::SelfReference(_) | Self::CircularReference(_) => "RECURSION_LIMIT_EXCEEDED",
+            Self::MissingCatalog | Self::UnknownCatalog(_) => "CATALOG_NOT_FOUND",
             _ => return None,
         };
         Some(RendererToAgentMessage::V1(RendererToAgent::Error(

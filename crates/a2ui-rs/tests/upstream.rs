@@ -56,6 +56,7 @@ struct Case {
     expect: Option<Value>,
     assertions: Option<Value>,
     messages: Option<Value>,
+    payload: Option<Value>,
     #[serde(rename = "expectError")]
     expect_error: Option<Value>,
     input: Option<Value>,
