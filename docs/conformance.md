@@ -129,6 +129,12 @@ The incompatible catalog case checks rejection when the catalog loads.
 The tree cases check resolved properties and the catalog used by calls in a template.
 The harness passes a component override as `@catalogId`. Function calls keep `catalogId`.
 
+## Reserved keys
+
+The harness checks acceptance of `@path`, `@call`, and `@index` in v1.0 component properties.
+It checks rejection of unescaped single-`@` keys in dynamic objects.
+The resolution cases compare literal keys in both component snapshots and mounted nodes.
+
 ## Event actions
 
 The mounted event cases check scoped context, escaped keys, and dispatch metadata.

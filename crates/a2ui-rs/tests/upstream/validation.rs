@@ -1,14 +1,20 @@
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use a2ui_rs::catalog::Catalog;
 use a2ui_rs::data_model::DataError;
 use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage};
+use a2ui_rs::resolution::LocalFunctions;
+use a2ui_rs::routing::RoutingSession;
+use a2ui_rs::rpc::RpcHandler;
 use a2ui_rs::surface::SurfaceError;
 use a2ui_rs::validation::{MessageProcessor, ValidationConfig, ValidationError};
 use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
+
+const RESERVED_KEYS_SUITE: &str = "core/reserved_keys.yaml";
 
 fn supports_transaction(suite: &str, case: &Case) -> bool {
     if suite == "core/error_responses.yaml" {
@@ -59,6 +65,13 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
 }
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
+    if suite == RESERVED_KEYS_SUITE {
+        return matches!(case.action.as_str(), "validate" | "process_messages")
+            && case
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog["protocolVersion"] == "1.0");
+    }
     if suite == "core/add_catalog.yaml" {
         return case.action == "process_messages"
             && case.protocol_version.as_deref() == Some("1.0")
@@ -150,6 +163,9 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
     if case.action == "from_json" {
         return execute_catalog(upstream, case, &common);
+    }
+    if suite == RESERVED_KEYS_SUITE {
+        return execute_reserved_keys(upstream, case, &common);
     }
 
     let config = case
@@ -244,6 +260,95 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
     }
     if let Some(expect) = &case.expect {
         assert_state(&processor, expect)?;
+    }
+    Ok(())
+}
+
+fn execute_reserved_keys(upstream: &Path, case: &Case, common: &Value) -> Result<(), TestError> {
+    let fixture_catalog = case
+        .catalog
+        .as_ref()
+        .ok_or("missing reserved keys catalog")?;
+    let catalog = if fixture_catalog.get("catalogId").is_some() {
+        fixture_catalog.clone()
+    } else {
+        let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+        basic["catalogId"] = json!("basic");
+        basic
+    };
+    let mut processor = MessageProcessor::default();
+    processor.add_catalog(Catalog::from_json(catalog, common)?)?;
+    let messages = match case.action.as_str() {
+        "validate" => case.payload.as_ref(),
+        "process_messages" => case.messages.as_ref(),
+        _ => return Err("unexpected reserved keys action".into()),
+    }
+    .ok_or("missing reserved keys messages")?;
+    apply_messages(
+        &mut processor,
+        case,
+        messages,
+        None,
+        case.expect_error.as_ref(),
+        true,
+    )?;
+    if case.action == "validate" {
+        return Ok(());
+    }
+
+    let surfaces = case
+        .expect
+        .as_ref()
+        .and_then(|expected| expected["surfaces"].as_object())
+        .ok_or("missing reserved keys surface expectations")?;
+    let mut session = RoutingSession::new(RpcHandler::new(processor), LocalFunctions::default());
+    for id in surfaces.keys() {
+        session.mount_tree(id);
+    }
+    let update = session.advance(Instant::now(), None);
+    if !update.errors.is_empty() {
+        return Err(format!("reserved keys resolution failed: {:?}", update.errors).into());
+    }
+    let functions = LocalFunctions::default();
+    for (id, expected) in surfaces {
+        let snapshot = session
+            .processor()
+            .resolve_components(id, &functions)?
+            .ok_or("missing resolved root")?;
+        let tree = session.node_tree(id).ok_or("missing mounted tree")?;
+        let root = tree
+            .root()
+            .and_then(|root| tree.node(root))
+            .ok_or("missing mounted root")?;
+        let [component] = expected["components"]
+            .as_array()
+            .ok_or("missing expected components")?
+            .as_slice()
+        else {
+            return Err("expected one component".into());
+        };
+        let mut fields = component
+            .as_object()
+            .ok_or("invalid component expectation")?
+            .clone();
+        if fields.remove("id").as_ref().and_then(Value::as_str) != Some(&root.component_id)
+            || fields.remove("component").as_ref().and_then(Value::as_str) != Some(&root.component)
+            || snapshot.id != root.component_id
+            || snapshot.component != root.component
+        {
+            return Err("unexpected reserved keys component".into());
+        }
+        for (key, expected) in fields {
+            let actual = root.properties.get(&key).map(|property| &property.value);
+            let snapshot_value = snapshot.properties.get(&key);
+            if actual != Some(&expected) || snapshot_value != Some(&expected) {
+                return Err(format!(
+                    "component {}.{key}: expected {expected}, got snapshot {snapshot_value:?} and mounted {actual:?}",
+                    root.component_id
+                )
+                .into());
+            }
+        }
     }
     Ok(())
 }
