@@ -456,7 +456,8 @@ impl<'f> RoutingSession<'f> {
             .surfaces
             .values_mut()
             .for_each(|surface| surface.shared.retain(|_, call| call.strong_count() > 0));
-        self.trees.publish(&self.evaluations, &mut update);
+        self.trees
+            .publish(self.rpc.processor(), &self.evaluations, &mut update);
         update
     }
 }

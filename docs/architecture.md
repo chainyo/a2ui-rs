@@ -162,9 +162,14 @@ A template node keeps its ID while its array index stays present.
 A nested template resolves its path in the parent node's scope.
 Use `write_node_property` to write a value through a node's data binding.
 The session resolves a relative binding path in that node's scope.
-An update reports each changed node once.
+An update reports each change type once for a node.
 Removing a node also removes its descendants and their property evaluations.
 Use `unmount_tree` to stop tracking a surface.
+
+Read the component's `@metadata` envelope from `MountedNode::metadata`.
+`NodeChangeKind::MetadataUpdated` reports a change to this envelope.
+An update that omits `@metadata` clears the node's metadata.
+A catalog property named `metadata` stays in the node's properties.
 
 Use `MountedProperty::is_action` to find action properties.
 Call `dispatch_node_action` with the node ID and property name.
