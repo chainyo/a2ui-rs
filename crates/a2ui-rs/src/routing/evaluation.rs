@@ -12,7 +12,8 @@ use super::{
 };
 use crate::catalog::{Catalog, PropertyKind};
 use crate::protocol::{
-    Action, CallAgentFunction, FunctionCall, JsonObject, RendererToAgent, RendererToAgentMessage,
+    Action, CallAgentFunction, FunctionCall, JsonObject, Metadata, RendererToAgent,
+    RendererToAgentMessage,
 };
 use crate::resolution::{
     ActionContext, DataScope, LocalFunctions, ResolveError, Resolver, coerce, index_with_offset,
@@ -129,7 +130,14 @@ impl Tick<'_, '_, '_> {
                         None => Ok(Progress::Ready(None)),
                     }
                 }),
-            Task::Event { event, .. } => self.event(&mut context, event, &mut evaluation.event),
+            Task::Event {
+                event, metadata, ..
+            } => self.event(
+                &mut context,
+                event,
+                metadata.as_ref(),
+                &mut evaluation.event,
+            ),
             Task::Property {
                 component,
                 property,
@@ -206,6 +214,7 @@ impl Tick<'_, '_, '_> {
         &mut self,
         context: &mut Context<'_>,
         event: &EventAction,
+        metadata: Option<&Metadata>,
         progress: &mut EventProgress,
     ) -> EvalResult {
         let location = Location::default();
@@ -253,7 +262,7 @@ impl Tick<'_, '_, '_> {
             timestamp: event.timestamp.clone(),
             context: std::mem::take(&mut progress.context),
             user_message,
-            metadata: None,
+            metadata: metadata.cloned(),
             extra: BTreeMap::new(),
         };
         self.outbound

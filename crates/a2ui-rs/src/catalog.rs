@@ -353,7 +353,20 @@ impl Catalog {
                 let (pointer, common) =
                     common_ref(reference).map_or((reference, common), |pointer| (pointer, true));
                 let kind = match (common, pointer) {
-                    (true, "#/$defs/Action") => Some(PropertyKind::Action),
+                    (true, "#/$defs/Action") => {
+                        if data.as_object().is_some_and(|object| {
+                            object.len() == 1
+                                && object
+                                    .get("event")
+                                    .or_else(|| object.get("functionCall"))
+                                    .is_some_and(Value::is_object)
+                        }) {
+                            shape
+                                .properties
+                                .insert(std::ptr::from_ref(data), PropertyKind::Action);
+                        }
+                        continue;
+                    }
                     (true, "#/$defs/DynamicString") => Some(PropertyKind::String),
                     (true, "#/$defs/DynamicNumber") => Some(PropertyKind::Number),
                     (true, "#/$defs/DynamicBoolean") => Some(PropertyKind::Boolean),

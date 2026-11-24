@@ -12,6 +12,10 @@ use crate::resolution::DataScope;
 use crate::rpc::ReceiveError;
 use crate::surface::Surface;
 
+mod action;
+
+pub use action::{ActionDispatchOptions, NodeActionError};
+
 /// Identifies one mounted node in a routing session.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NodeId(u64);
@@ -23,6 +27,8 @@ pub struct MountedProperty {
     pub value: Value,
     /// The absolute data path for a writable binding.
     pub binding_path: Option<String>,
+    /// Whether the catalog declares this property as an action.
+    pub is_action: bool,
 }
 
 /// A child instance and the field that refers to it.
@@ -180,6 +186,7 @@ impl MountedTrees {
                             MountedProperty {
                                 value: property.value(evaluations).clone(),
                                 binding_path: property.binding_path.clone(),
+                                is_action: property.is_action,
                             },
                         )
                     })
@@ -355,7 +362,8 @@ impl Entry {
         self.node.properties.len() != self.evaluations.len()
             || self.evaluations.iter().any(|(name, property)| {
                 self.node.properties.get(name).is_none_or(|previous| {
-                    previous.binding_path != property.binding_path
+                    previous.is_action != property.is_action
+                        || previous.binding_path != property.binding_path
                         || &previous.value != property.value(evaluations)
                 })
             })
@@ -365,6 +373,7 @@ impl Entry {
 struct PropertyEvaluation {
     id: EvaluationId,
     binding_path: Option<String>,
+    is_action: bool,
 }
 
 impl PropertyEvaluation {
@@ -379,8 +388,13 @@ impl PropertyEvaluation {
 struct Definition {
     component: String,
     catalog_id: Option<String>,
-    properties: BTreeMap<String, Option<String>>,
+    properties: BTreeMap<String, PropertyDefinition>,
     children: Vec<ChildDefinition>,
+}
+
+struct PropertyDefinition {
+    binding_path: Option<String>,
+    is_action: bool,
 }
 
 struct ChildDefinition {
@@ -413,15 +427,20 @@ fn definitions(
                     let kind = payload
                         .get(name)
                         .and_then(|value| shape.properties.get(&std::ptr::from_ref(value)));
-                    let binding = value
+                    let is_action = matches!(kind, Some(PropertyKind::Action));
+                    let binding_path = value
                         .as_object()
-                        .filter(|object| {
-                            object.len() == 1 && !matches!(kind, Some(PropertyKind::Action))
-                        })
+                        .filter(|object| object.len() == 1 && !is_action)
                         .and_then(|object| object.get("@path"))
                         .and_then(Value::as_str)
                         .map(str::to_owned);
-                    (name.clone(), binding)
+                    (
+                        name.clone(),
+                        PropertyDefinition {
+                            binding_path,
+                            is_action,
+                        },
+                    )
                 })
                 .collect();
             let children = shape
@@ -591,7 +610,7 @@ impl Reconcile<'_> {
                 false
             }
         });
-        for (name, binding_path) in &definition.properties {
+        for (name, definition) in &definition.properties {
             let property = entry.evaluations.entry(name.clone()).or_insert_with(|| {
                 let id = Evaluation::mount(
                     self.evaluations,
@@ -607,9 +626,12 @@ impl Reconcile<'_> {
                 PropertyEvaluation {
                     id,
                     binding_path: None,
+                    is_action: false,
                 }
             });
-            property.binding_path = binding_path
+            property.is_action = definition.is_action;
+            property.binding_path = definition
+                .binding_path
                 .as_ref()
                 .map(|path| entry.node.scope.resolve_path(path));
         }

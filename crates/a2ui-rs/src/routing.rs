@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::catalog::Catalog;
 use crate::protocol::{
-    AgentToRenderer, AgentToRendererMessage, ErrorTarget, GenericError, JsonObject, RendererError,
-    RendererToAgent, RendererToAgentMessage,
+    AgentToRenderer, AgentToRendererMessage, ErrorTarget, GenericError, JsonObject, Metadata,
+    RendererError, RendererToAgent, RendererToAgentMessage,
 };
 use crate::resolution::{DataScope, LocalFunctions, to_boolean};
 use crate::rpc::{Outbound, PendingCall, ReceiveError, RpcHandler};
@@ -23,8 +23,8 @@ pub use check::{ValidationResult, ValidationSeverity};
 use evaluation::Tick;
 use tree::MountedTrees;
 pub use tree::{
-    MountedChild, MountedNode, MountedProperty, NodeChange, NodeChangeKind, NodeId, NodeTree,
-    NodeWriteError,
+    ActionDispatchOptions, MountedChild, MountedNode, MountedProperty, NodeActionError, NodeChange,
+    NodeChangeKind, NodeId, NodeTree, NodeWriteError,
 };
 
 const CACHE_LIMIT: usize = 256;
@@ -303,6 +303,7 @@ impl<'f> RoutingSession<'f> {
             scope,
             Task::Event {
                 event,
+                metadata: None,
                 user_activated,
             },
         )
@@ -478,6 +479,7 @@ enum Task {
     },
     Event {
         event: EventAction,
+        metadata: Option<Metadata>,
         user_activated: bool,
     },
 }
