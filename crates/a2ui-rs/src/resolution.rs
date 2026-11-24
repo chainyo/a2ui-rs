@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde_json::{Number, Value};
 use thiserror::Error;
 
-use crate::catalog::{Catalog, CatalogError, ChildReference, PropertyKind};
+use crate::catalog::{Catalog, CatalogError, CatalogView, ChildReference, PropertyKind};
 use crate::data_model::{DataError, DataModel};
 use crate::expression::{Expression, ParseError, is_identifier, parse_template};
 use crate::protocol::{Component, DataBinding, FunctionCall, JsonObject};
@@ -232,7 +232,7 @@ pub struct ResolvedComponent {
 pub(crate) struct Resolver<'a, 'f> {
     data: &'a DataModel,
     default_catalog: Option<&'a str>,
-    catalogs: &'a BTreeMap<String, Catalog>,
+    catalogs: CatalogView<'a>,
     functions: &'a LocalFunctions<'f>,
     properties: Option<&'a BTreeMap<*const Value, PropertyKind>>,
 }
@@ -240,7 +240,7 @@ pub(crate) struct Resolver<'a, 'f> {
 impl<'a, 'f> Resolver<'a, 'f> {
     pub(crate) fn new(
         surface: &'a Surface,
-        catalogs: &'a BTreeMap<String, Catalog>,
+        catalogs: CatalogView<'a>,
         functions: &'a LocalFunctions<'f>,
     ) -> Self {
         Self::with_context(
@@ -254,7 +254,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
     pub(crate) fn with_context(
         data: &'a DataModel,
         default_catalog: Option<&'a str>,
-        catalogs: &'a BTreeMap<String, Catalog>,
+        catalogs: CatalogView<'a>,
         functions: &'a LocalFunctions<'f>,
     ) -> Self {
         Self {

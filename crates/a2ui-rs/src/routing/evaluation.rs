@@ -186,7 +186,7 @@ impl Tick<'_, '_, '_> {
             return Ok(None);
         };
         let catalog = self.catalog_id(surface, component.catalog_id.clone())?;
-        let catalog = self.lookup_catalog(&catalog)?;
+        let catalog = self.lookup_catalog(surface, &catalog)?;
         catalog
             .component_checks(component)
             .map_err(RoutingError::expression)?
@@ -220,7 +220,7 @@ impl Tick<'_, '_, '_> {
             return self.resolve(context, &payload, &Location::default(), &kinds);
         }
         let catalog = self.catalog_id(context.surface, component.catalog_id.clone())?;
-        let catalog = self.lookup_catalog(&catalog)?;
+        let catalog = self.lookup_catalog(context.surface, &catalog)?;
         let payload =
             serde_json::to_value(&component.properties).map_err(RoutingError::expression)?;
         let Some(value) = payload.get(name) else {
@@ -460,7 +460,14 @@ impl Tick<'_, '_, '_> {
             Arguments::Waiting => return Ok(Progress::Waiting),
             Arguments::Cancelled => return Ok(Progress::Cancelled),
         };
-        self.set_resolved_arguments(&mut call, args, &catalog_id, declared, local)?;
+        self.set_resolved_arguments(
+            context.surface,
+            &mut call,
+            args,
+            &catalog_id,
+            declared,
+            local,
+        )?;
 
         let empty = JsonObject::new();
         let key = serde_json::to_string(&(
@@ -511,6 +518,7 @@ impl Tick<'_, '_, '_> {
 
     fn set_resolved_arguments(
         &self,
+        surface: &str,
         call: &mut FunctionCall,
         mut args: JsonObject,
         catalog_id: &str,
@@ -518,7 +526,7 @@ impl Tick<'_, '_, '_> {
         local: bool,
     ) -> Result<(), RoutingError> {
         let catalog = declared
-            .then(|| self.lookup_catalog(catalog_id))
+            .then(|| self.lookup_catalog(surface, catalog_id))
             .transpose()?;
         if let Some(catalog) = catalog.filter(|_| local) {
             catalog.preserve_required_local_arguments(call, &mut args);
@@ -600,10 +608,14 @@ impl Tick<'_, '_, '_> {
             .ok_or_else(|| RoutingError::new("CATALOG_ERROR", "Surface has no default catalogId"))
     }
 
-    fn lookup_catalog(&self, catalog: &str) -> Result<&Catalog, RoutingError> {
-        self.rpc.processor().catalogs.get(catalog).ok_or_else(|| {
-            RoutingError::new("CATALOG_ERROR", format!("Catalog not found: {catalog}"))
-        })
+    fn lookup_catalog(&self, surface: &str, catalog: &str) -> Result<&Catalog, RoutingError> {
+        let processor = self.rpc.processor();
+        processor
+            .get(surface)
+            .and_then(|surface| processor.surface_catalogs(surface).get(catalog))
+            .ok_or_else(|| {
+                RoutingError::new("CATALOG_ERROR", format!("Catalog not found: {catalog}"))
+            })
     }
 
     fn prepare(
@@ -612,7 +624,7 @@ impl Tick<'_, '_, '_> {
         call: &mut FunctionCall,
         catalog_id: &str,
     ) -> Result<(bool, bool, Value, PropertyKinds), RoutingError> {
-        let catalog = self.lookup_catalog(catalog_id)?;
+        let catalog = self.lookup_catalog(context.surface, catalog_id)?;
         call.catalog_id = Some(catalog_id.to_owned());
         let schema = catalog.function_schema(&call.name);
         let declared = !schema.is_null();
@@ -678,7 +690,11 @@ impl Tick<'_, '_, '_> {
             }
             return Ok(value);
         }
-        let resolver = Resolver::new(surface, &self.rpc.processor().catalogs, self.functions);
+        let resolver = Resolver::new(
+            surface,
+            self.rpc.processor().surface_catalogs(surface),
+            self.functions,
+        );
         if call.name == "formatString" {
             let template = args
                 .get("value")

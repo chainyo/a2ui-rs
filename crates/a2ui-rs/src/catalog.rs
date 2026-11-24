@@ -37,6 +37,53 @@ pub(crate) struct PayloadShape<'a> {
 
 type PayloadCandidate<'a> = (&'a Value, &'a Value, bool, String, Location);
 
+// Each entry keeps its index. A surface stores the number of entries at creation.
+#[derive(Default)]
+pub(crate) struct CatalogRegistry {
+    entries: BTreeMap<String, (usize, Catalog)>,
+}
+
+impl CatalogRegistry {
+    pub(crate) fn insert(&mut self, catalog: Catalog) -> Result<(), String> {
+        let index = self.len();
+        match self.entries.entry(catalog.id().to_owned()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((index, catalog));
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => Err(entry.key().clone()),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn view(&self, count: usize) -> CatalogView<'_> {
+        CatalogView {
+            registry: self,
+            count,
+        }
+    }
+
+    pub(crate) fn current(&self) -> CatalogView<'_> {
+        self.view(self.len())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct CatalogView<'a> {
+    registry: &'a CatalogRegistry,
+    count: usize,
+}
+
+impl<'a> CatalogView<'a> {
+    pub(crate) fn get(self, id: &str) -> Option<&'a Catalog> {
+        let (index, catalog) = self.registry.entries.get(id)?;
+        (*index < self.count).then_some(catalog)
+    }
+}
+
 /// An immutable catalog with compiled component and function schemas.
 pub struct Catalog {
     id: String,

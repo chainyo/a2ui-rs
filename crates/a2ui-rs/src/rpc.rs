@@ -214,7 +214,10 @@ impl RpcHandler {
             .as_deref()
             .or(surface.catalog_id())
             .ok_or_else(|| invalid("Surface has no default catalogId"))?;
-        let catalog = self.catalog(catalog_id)?;
+        let catalogs = self.processor.surface_catalogs(surface);
+        let catalog = catalogs
+            .get(catalog_id)
+            .ok_or_else(|| invalid(format!("Catalog not found: {catalog_id}")))?;
         call.catalog_id = Some(catalog_id.to_owned());
         let declared = !catalog.function_schema(&call.name).is_null();
         if declared {
@@ -230,7 +233,7 @@ impl RpcHandler {
             catalog.apply_function_defaults(call);
             catalog.validate_function(call).map_err(invalid_error)?;
         }
-        let resolver = Resolver::new(surface, &self.processor.catalogs, functions);
+        let resolver = Resolver::new(surface, catalogs, functions);
         let args = resolver
             .rpc_arguments(call, catalog)
             .map_err(execution_error)?;
@@ -372,7 +375,7 @@ impl RpcHandler {
 
     fn catalog(&self, id: &str) -> Result<&Catalog, RpcError> {
         self.processor
-            .catalogs
+            .current_catalogs()
             .get(id)
             .ok_or_else(|| invalid(format!("Catalog not found: {id}")))
     }
@@ -388,9 +391,9 @@ impl RpcHandler {
                 .processor
                 .get(id)
                 .ok_or_else(|| invalid(format!("Unknown surface: {id}")))?;
-            Resolver::new(surface, &self.processor.catalogs, functions)
+            Resolver::new(surface, self.processor.surface_catalogs(surface), functions)
         } else {
-            Resolver::with_context(&empty, None, &self.processor.catalogs, functions)
+            Resolver::with_context(&empty, None, self.processor.current_catalogs(), functions)
         };
         let catalog = self.catalog(&request.call_function.catalog_id)?;
         let mut call = FunctionCall {
