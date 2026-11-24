@@ -106,6 +106,7 @@ The processor cases check permissive streaming and validation rules for one mess
 The harness compares the surface before and after a rejected update.
 The duplicate-ID and cycle fixtures check rejection, rollback, and the renderer error envelope.
 The harness checks the error code, message, and surface ID.
+The catalog lookup cases check unknown catalog IDs and absent surface defaults.
 
 ## Event actions
 
