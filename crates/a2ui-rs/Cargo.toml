@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 unicode-ident.workspace = true
+url.workspace = true
 writeable.workspace = true
 
 [dev-dependencies]

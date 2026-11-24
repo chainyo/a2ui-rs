@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "shipment",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {"trackingUrl": "https://example.com/shipments/123"},
+    "components": [
+      {
+        "id": "root",
+        "component": "Button",
+        "child": "label",
+        "action": {
+          "functionCall": {"@call": "openUrl", "args": {"url": {"@path": "/trackingUrl"}}}
+        }
+      },
+      {"id": "label", "component": "Text", "text": "Track shipment"}
+    ]
+  }
+}

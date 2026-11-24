@@ -1,8 +1,9 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use a2ui_rs::basic_catalog::register_validation_functions;
+use a2ui_rs::basic_catalog::{register_open_url, register_validation_functions};
 use a2ui_rs::catalog::Catalog;
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::routing::{EvaluationId, EvaluationState, RoutingSession};
@@ -388,6 +389,79 @@ pub(super) fn supports_local_action(suite: &str, case: &Case) -> bool {
             "test_action_function_call_local_mutation_no_event_dispatched"
                 | "test_action_function_call_execution_error"
         )
+}
+
+pub(super) fn supports_open_url(suite: &str, case: &Case) -> bool {
+    suite == "core/actions.yaml"
+        && case.action == "dispatch_action"
+        && case.protocol_version.as_deref() == Some("1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_action_function_call_open_url_with_user_activation_allowed"
+                | "test_action_function_call_open_url_without_user_activation_denied"
+        )
+}
+
+pub(super) fn execute_open_url(upstream: &Path, case: &Case) -> Result<(), TestError> {
+    let surface = case.surface_id.as_deref().ok_or("missing surface ID")?;
+    let call = case
+        .action_payload
+        .as_ref()
+        .and_then(|payload| payload.get("functionCall"))
+        .ok_or("missing action call")?;
+    let activated = case.user_activation.ok_or("missing user activation")?;
+    let catalog_id = "open_url_conformance";
+    let (catalog, common) = basic_catalog(upstream, catalog_id)?;
+    let opens = Cell::new(0);
+    let mut functions = LocalFunctions::default();
+    register_open_url(&mut functions, catalog_id, |_| {
+        opens.set(opens.get() + 1);
+        Ok(())
+    });
+    let mut session = RoutingSession::new(RpcHandler::default(), functions);
+    session.add_catalog(Catalog::from_json(catalog, &common)?)?;
+    let now = Instant::now();
+    receive(
+        &mut session,
+        json!({"version": "1.0", "createSurface": {"surfaceId": surface, "catalogId": catalog_id}}),
+        now,
+    )?;
+    let action = session.run_action(surface, DataScope::default(), call.clone(), activated);
+    let mut dispatched = Vec::new();
+    let update = session.advance(
+        now,
+        Some(&mut |message| {
+            dispatched.push(message);
+            Ok(())
+        }),
+    );
+    if case.expect_dispatched.is_some() || !dispatched.is_empty() {
+        return Err(format!("unexpected outbound messages: {dispatched:?}").into());
+    }
+    if let Some(expected) = &case.expect_error {
+        let [error] = update.errors.as_slice() else {
+            return Err("expected one activation error".into());
+        };
+        let actual = serde_json::to_value(error)?;
+        let message = expected["message"]
+            .as_str()
+            .ok_or("missing expected error message")?;
+        if actual["error"]["surfaceId"] != expected["surfaceId"]
+            || !actual["error"]["message"]
+                .as_str()
+                .is_some_and(|text| text.contains(message))
+            || !matches!(session.status(action), Some(EvaluationState::Failed(_)))
+            || opens.get() != 0
+        {
+            return Err(format!("unexpected activation result: {actual}").into());
+        }
+    } else if !update.errors.is_empty()
+        || session.value(action) != Some(Value::Null)
+        || opens.get() != 1
+    {
+        return Err(format!("openUrl did not complete once: {:?}", update.errors).into());
+    }
+    Ok(())
 }
 
 pub(super) fn execute_local_action(upstream: &Path, case: &Case) -> Result<(), TestError> {

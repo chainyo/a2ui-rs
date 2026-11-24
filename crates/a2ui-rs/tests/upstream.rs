@@ -62,6 +62,10 @@ struct Case {
     surface_id: Option<String>,
     #[serde(rename = "actionPayload")]
     action_payload: Option<Value>,
+    #[serde(rename = "userActivation")]
+    user_activation: Option<bool>,
+    #[serde(rename = "expectDispatched")]
+    expect_dispatched: Option<Value>,
     #[serde(rename = "expectDataModel")]
     expect_data_model: Option<Value>,
     function: Option<String>,

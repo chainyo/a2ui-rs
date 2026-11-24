@@ -105,7 +105,8 @@ impl Tick<'_, '_, '_> {
             surface: &evaluation.surface,
             scope: &evaluation.scope,
             imperative: evaluation.task.imperative(),
-            activated: evaluation.task.activated(),
+            // A pending action can resume after the user gesture ends.
+            activated: evaluation.task.activated() && !evaluation.reported,
             slots: &mut evaluation.slots,
             visited: BTreeSet::new(),
             diagnostics: BTreeMap::new(),

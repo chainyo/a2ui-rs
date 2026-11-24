@@ -164,6 +164,12 @@ The session applies a successful function's writes before it runs the next step.
 If a function fails, the action stops. The session keeps the writes from earlier successful functions.
 Event context entries resolve in order. An error stops the event before dispatch.
 
+Use `basic_catalog::register_open_url` to give the Basic Catalog a host callback.
+The SDK accepts absolute URLs with the `http`, `https`, `mailto`, and `tel` schemes.
+The callback receives the parsed URL. A successful call completes without a value or an agent action event.
+Call `advance` during the user gesture to run the callback.
+User activation expires after the first call to `advance` that evaluates the action.
+
 ## Reactive node trees
 
 Call `RoutingSession::mount_tree` to track a surface.
