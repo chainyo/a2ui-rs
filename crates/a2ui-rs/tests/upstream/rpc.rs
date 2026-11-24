@@ -2,15 +2,28 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use a2ui_rs::catalog::Catalog;
+use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::{CallAgentFunction, RendererToAgentMessage};
 use a2ui_rs::resolution::LocalFunctions;
 use a2ui_rs::rpc::{CallOptions, PendingCall, ReceiveError, RpcError, RpcHandler};
+use a2ui_rs::validation::ValidationError;
 use serde_json::{Value, json};
 
 use super::{Case, TestError};
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
+    if suite == "core/error_responses.yaml" {
+        return case.action == "validate"
+            && case.protocol_version.as_deref() == Some("1.0")
+            && matches!(
+                case.name.as_str(),
+                "test_error_response_create_surface_incompatible_catalog_version"
+                    | "test_error_response_delete_surface_missing_surface_id"
+                    | "test_error_response_call_renderer_function_missing_call_function"
+                    | "test_error_response_call_renderer_function_non_object_args"
+                    | "test_error_response_call_renderer_function_missing_catalog_id"
+            );
+    }
     suite == "core/rpc_functions.yaml"
         && case.action == "handle_rpc"
         && case
@@ -47,6 +60,9 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
 }
 
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
+    if case.action == "validate" {
+        return execute_error_response(upstream, case);
+    }
     let args = case.args.as_ref().ok_or("missing RPC fixture arguments")?;
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
     let basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
@@ -56,6 +72,95 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     } else {
         execute_inbound(&mut handler, case, args, &common, basic)
     }
+}
+
+fn execute_error_response(upstream: &Path, case: &Case) -> Result<(), TestError> {
+    let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
+    let Some([input]) = case
+        .payload
+        .as_ref()
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    else {
+        return Err("expected one incoming message".into());
+    };
+    let expected = case
+        .expect_error
+        .as_ref()
+        .ok_or("missing incoming error expectation")?;
+    let mut handler = RpcHandler::default();
+    let incompatible =
+        case.name == "test_error_response_create_surface_incompatible_catalog_version";
+    let requested = &input["createSurface"]["catalogId"];
+    let mut rejected_catalog = false;
+    for path in &case.catalog_paths {
+        let document = read_json(upstream, path)?;
+        let matches_requested = !requested.is_null() && document["catalogId"] == *requested;
+        match Catalog::from_json(document, &common) {
+            Ok(catalog) if !(incompatible && matches_requested) => handler.add_catalog(catalog)?,
+            Err(CatalogError::InvalidCatalog(message))
+                if incompatible && matches_requested && message.contains("protocolVersion 1.0") =>
+            {
+                rejected_catalog = true;
+            }
+            outcome => {
+                return Err(
+                    format!("unexpected fixture catalog outcome: {:?}", outcome.err()).into(),
+                );
+            }
+        }
+    }
+    if incompatible && !rejected_catalog {
+        return Err("expected registration of the requested catalog to fail".into());
+    }
+    let error = match handler.receive_json(input, Instant::now(), &LocalFunctions::default()) {
+        Err(error) => error,
+        Ok(outcome) => return Err(format!("incoming message was accepted: {outcome:?}").into()),
+    };
+    let outbound = match &error {
+        ReceiveError::Validation(ValidationError::UnknownCatalog(id)) if incompatible => {
+            let surface = input["createSurface"]["surfaceId"]
+                .as_str()
+                .ok_or("missing surface ID")?;
+            if expected["category"] != "CatalogError"
+                || expected["surfaceId"] != surface
+                || input["createSurface"]["catalogId"] != id.as_str()
+                || handler.processor().get(surface).is_some()
+            {
+                return Err(format!("unexpected catalog rejection: {error}").into());
+            }
+            error.renderer_error_for_surface(surface)
+        }
+        ReceiveError::MissingDeleteSurfaceId
+            if expected["category"] == "ValidationError"
+                && expected["surfaceId"] == ""
+                && expected["path"] == "/surfaceId" =>
+        {
+            error.renderer_error()
+        }
+        ReceiveError::Envelope {
+            function_call_id: Some(id),
+            ..
+        } if expected["category"] == "ValidationError"
+            && expected["functionCallId"] == id.as_str() =>
+        {
+            error.renderer_error()
+        }
+        _ => return Err(format!("unexpected incoming error: {error:?}").into()),
+    }
+    .ok_or("missing renderer error envelope")?;
+    let actual = serde_json::to_value(outbound)?;
+    let renderer = &expected["rendererError"];
+    assert_response(renderer, &actual)?;
+    if renderer["error"]
+        .as_object()
+        .map(serde_json::Map::keys)
+        .zip(actual["error"].as_object().map(serde_json::Map::keys))
+        .is_none_or(|(expected, actual)| expected.ne(actual))
+    {
+        return Err(format!("unexpected renderer error fields: {actual}").into());
+    }
+    Ok(())
 }
 
 fn read_json(upstream: &Path, file: &str) -> Result<Value, TestError> {

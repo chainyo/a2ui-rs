@@ -109,6 +109,8 @@ The harness checks the error code, message, and surface ID.
 The invalid pointer and component validation cases also check field paths.
 The composition cases check paths for disallowed parents and child references.
 The catalog lookup cases check unknown catalog IDs and absent surface defaults.
+The incompatible catalog case checks registration rejection and the error for a v1.0 surface request.
+The incoming envelope cases check the field path or function call ID in the renderer error.
 
 ## Event actions
 
