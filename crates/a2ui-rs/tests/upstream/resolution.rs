@@ -12,7 +12,26 @@ use serde_json::{Value, json};
 
 use super::{Case, TestError};
 
+#[path = "multi_catalog.rs"]
+mod multi_catalog;
+
+const MULTI_CATALOG_SUITE: &str = "core/multi_catalog.yaml";
+
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
+    if suite == MULTI_CATALOG_SUITE {
+        return match case.action.as_str() {
+            "select_catalog" => case
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog["protocolVersion"] == "1.0"),
+            "validate" => matches!(
+                case.name.as_str(),
+                "test_multi_catalog_function_call_catalog_id_override"
+                    | "test_multi_catalog_format_string_index_and_catalog_call_without_default"
+            ),
+            _ => false,
+        };
+    }
     if suite == "core/expressions.yaml" && case.action == "parse_expression_template" {
         return true;
     }
@@ -80,6 +99,9 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         return execute_parser(case);
     }
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
+    if suite == MULTI_CATALOG_SUITE {
+        return multi_catalog::execute(upstream, case, &common);
+    }
     if case.action == "evaluate_function" {
         return execute_function(upstream, case, &common);
     }

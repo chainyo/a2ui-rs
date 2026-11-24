@@ -54,6 +54,8 @@ struct Case {
     #[serde(rename = "validationConfig")]
     validation_config: Option<a2ui_rs::validation::ValidationConfig>,
     expect: Option<Value>,
+    #[serde(rename = "expectSelected")]
+    expect_selected: Option<String>,
     assertions: Option<Value>,
     messages: Option<Value>,
     payload: Option<Value>,
@@ -142,7 +144,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                     format!("missing or duplicate case name in {}", suite.display()).into(),
                 );
             }
-            let version = case.protocol_version.as_deref();
+            let version = case_protocol_version(&suite_name, &case);
             let (status, reason) = if is_legacy_suite(suite)
                 || matches!(
                     version,
@@ -600,6 +602,16 @@ fn git_output(directory: &Path, arguments: &[&str]) -> Result<String, TestError>
     Ok(String::from_utf8(output.stdout)?)
 }
 
+fn case_protocol_version<'a>(suite: &str, case: &'a Case) -> Option<&'a str> {
+    case.protocol_version.as_deref().or_else(|| {
+        if matches!(suite, "core/data_model.yaml" | "core/data_context.yaml") {
+            case.catalog.as_ref()?.get("protocolVersion")?.as_str()
+        } else {
+            None
+        }
+    })
+}
+
 fn is_legacy_suite(path: &Path) -> bool {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -657,4 +669,28 @@ fn dedicated_legacy_suites_remain_outside_scope() {
     for suite in ["message_processor_v1_0.yaml", "common_types.yaml"] {
         assert!(!is_legacy_suite(Path::new(suite)));
     }
+}
+
+#[test]
+fn data_suite_catalog_versions_apply_when_the_case_omits_its_version() -> Result<(), TestError> {
+    let cases = parse_cases(
+        r#"
+- name: legacy_data
+  catalog:
+    protocolVersion: "v0.9"
+- name: explicit_v1
+  protocolVersion: "1.0"
+  catalog:
+    protocolVersion: "v0.9"
+"#,
+    )?;
+    for suite in ["core/data_model.yaml", "core/data_context.yaml"] {
+        assert_eq!(case_protocol_version(suite, &cases[0]), Some("v0.9"));
+        assert_eq!(case_protocol_version(suite, &cases[1]), Some("1.0"));
+    }
+    assert_eq!(
+        case_protocol_version("core/error_responses.yaml", &cases[0]),
+        None
+    );
+    Ok(())
 }

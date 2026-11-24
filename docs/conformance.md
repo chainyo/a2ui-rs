@@ -70,6 +70,7 @@ git ls-tree HEAD fixtures/upstream
 
 The checkout contains the protocol specifications, SDK blueprints, catalogs, examples, and complete upstream conformance suites.
 The tests use v1.0 references and classify dedicated legacy suites outside scope.
+For Data Model and Data Context cases without a case version, the harness uses the catalog version.
 Upstream files retain their own license notices. Do not edit them inside this repository.
 
 Install Git before you run the inventory test. The test uses local Git metadata.
@@ -117,6 +118,14 @@ The incoming envelope cases check the field path or function call ID in the rend
 The `add_catalog` cases register a catalog between messages and check which surfaces can use it.
 The case for an earlier surface uses `catalogId` for a component override.
 The harness passes that override as `@catalogId`, the v1.0 component envelope field.
+
+## Multiple catalogs
+
+The selection cases build surfaces from the catalog IDs in the fixtures.
+They check component updates and function calls through `MessageProcessor`.
+The incompatible catalog case checks rejection when the catalog loads.
+The tree cases check resolved properties and the catalog used by calls in a template.
+The harness passes a component override as `@catalogId`. Function calls keep `catalogId`.
 
 ## Event actions
 
