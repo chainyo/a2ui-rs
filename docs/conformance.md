@@ -13,6 +13,8 @@ RPC cases use `RpcHandler` to send calls and receive responses.
 The RPC tests advance a monotonic clock to check timeouts.
 Agent routing cases use `RoutingSession` to mount expressions and execute actions.
 The harness checks wire requests, evaluation values, event order, and correlated errors.
+Node resolution cases use `RoutingSession::mount_tree` and `advance`.
+The harness checks the initial node, bound values, and update counts as messages arrive.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.

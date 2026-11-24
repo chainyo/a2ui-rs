@@ -38,6 +38,12 @@ impl Surface {
         &self.components
     }
 
+    pub(crate) fn component(&self, id: &str) -> Option<&Component> {
+        self.component_indices
+            .get(id)
+            .map(|&index| &self.components[index])
+    }
+
     /// Returns the surface data model.
     #[must_use]
     pub fn data_model(&self) -> &DataModel {
