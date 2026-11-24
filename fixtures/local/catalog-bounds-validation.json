@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "orders",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {"orders": [{"quantity": "unknown", "code": "A"}, {"quantity": 5, "code": "SK5"}]},
+    "components": [
+      {"id": "root", "component": "Column", "children": {"componentId": "order", "path": "/orders"}},
+      {"id": "order", "component": "Row", "children": ["quantity", "code"]},
+      {
+        "id": "quantity", "component": "TextField", "label": "Quantity", "value": {"@path": "quantity"},
+        "@checks": [
+          {"condition": {"@call": "numeric", "args": {"value": {"@path": "quantity"}, "min": 1, "max": 10}}, "message": "Use a quantity from 1 to 10"}
+        ]
+      },
+      {
+        "id": "code", "component": "TextField", "label": "Order code", "value": {"@path": "code"},
+        "@checks": [
+          {"condition": {"@call": "length", "args": {"value": {"@path": "code"}, "min": 3.0, "max": 5}}, "message": "Use 3 to 5 characters"},
+          {"condition": {"@call": "regex", "args": {"value": {"@path": "code"}, "pattern": "^[A-Z]+\\d$"}}, "message": "Use capital letters and a final digit"}
+        ]
+      }
+    ]
+  }
+}

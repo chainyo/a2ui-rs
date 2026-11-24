@@ -141,13 +141,14 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
                 match execute_supported_case(&upstream, &suite_name, &case) {
-                    Ok(()) if accessibility::supports(&suite_name, &case) => {
-                        pending += 1;
-                        ("skipped", Some("Core assertions passed. Platform accessibility and axe-core assertions pending.".to_owned()))
-                    }
                     Ok(()) => {
-                        passed += 1;
-                        ("passed", None)
+                        if let Some(reason) = pending_after_execution(&suite_name, &case) {
+                            pending += 1;
+                            ("skipped", Some(reason.to_owned()))
+                        } else {
+                            passed += 1;
+                            ("passed", None)
+                        }
                     }
                     Err(error) => {
                         failures.push(format!("{suite_name}::{}: {error}", case.name));
@@ -233,6 +234,20 @@ fn is_data_model_suite(suite: &str) -> bool {
 }
 
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
+
+fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
+    if accessibility::supports(suite, case) {
+        Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")
+    } else if suite == "core/validation_result.yaml"
+        && case.name == "test_validation_result_multiple_rules_preserve_order"
+    {
+        Some(
+            "Protocol assertions passed. Fixture uses the fallback message in place of the function message.",
+        )
+    } else {
+        None
+    }
+}
 
 fn supports_case(suite: &str, case: &Case) -> bool {
     if accessibility::supports(suite, case)

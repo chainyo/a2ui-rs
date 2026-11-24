@@ -15,6 +15,11 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         return true;
     }
     if suite == "core/functions.yaml" && case.action == "evaluate_function" {
+        if case.protocol_version.as_deref() == Some("1.0")
+            && case.name.starts_with("test_evaluate_function_regex_v10_")
+        {
+            return true;
+        }
         return matches!(
             case.name.as_str(),
             "test_evaluate_function_format_string_basic"
@@ -155,9 +160,9 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
         (Err(error), None, Some(expected)) => {
             let category = match error {
                 ResolveError::UnknownCatalog(_) | ResolveError::MissingCatalog => "CatalogError",
-                ResolveError::Catalog(CatalogError::UnknownEntry(_)) | ResolveError::IndexScope => {
-                    "ExpressionError"
-                }
+                ResolveError::Catalog(CatalogError::UnknownEntry(_))
+                | ResolveError::IndexScope
+                | ResolveError::LocalFunction(_) => "ExpressionError",
                 _ => return Err(error.into()),
             };
             assert_error(expected, category, &error.to_string())

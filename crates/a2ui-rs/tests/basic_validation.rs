@@ -153,3 +153,62 @@ fn assert_required_failure(
     );
     Ok(())
 }
+
+#[test]
+fn bounds_and_regex_checks_recover_on_scoped_writes() -> Result<(), Box<dyn Error>> {
+    let mut session = session()?;
+    let now = Instant::now();
+    let surface = "orders";
+    session.mount_tree(surface);
+    session.receive(
+        serde_json::from_str(include_str!(
+            "../../../fixtures/local/catalog-bounds-validation.json"
+        ))?,
+        now,
+    )?;
+    assert!(session.advance(now, None).errors.is_empty());
+    let tree = session.node_tree(surface).ok_or("missing tree")?;
+    let root = tree
+        .root()
+        .and_then(|id| tree.node(id))
+        .ok_or("missing root")?;
+    let [order, sibling] = root.children.as_slice() else {
+        return Err("expected two orders".into());
+    };
+    let order = tree.node(order.id).ok_or("missing order")?;
+    let [quantity, code] = order.children.as_slice() else {
+        return Err("expected quantity and code".into());
+    };
+    let (quantity, code) = (quantity.id, code.id);
+    let sibling = tree.node(sibling.id).ok_or("missing sibling")?.clone();
+    assert_eq!(
+        tree.node(quantity).ok_or("missing quantity")?.properties["validationErrors"].value,
+        json!(["Use a quantity from 1 to 10"])
+    );
+    assert_eq!(
+        tree.node(code).ok_or("missing code")?.properties["validationErrors"].value,
+        json!([
+            "Use 3 to 5 characters",
+            "Use capital letters and a final digit"
+        ])
+    );
+
+    session.write_node_property(surface, quantity, "value", json!("10"))?;
+    session.write_node_property(surface, code, "value", json!("US7"))?;
+    let update = session.advance(now, None);
+    assert!(update.errors.is_empty());
+    assert_eq!(update.nodes.len(), 2);
+    let tree = session.node_tree(surface).ok_or("missing tree")?;
+    for id in [quantity, code] {
+        assert!(update.nodes.contains(&NodeChange {
+            surface_id: surface.to_owned(),
+            id,
+            kind: NodeChangeKind::Updated
+        }));
+        let node = tree.node(id).ok_or("missing order field")?;
+        assert_eq!(node.properties["isValid"].value, Value::Bool(true));
+        assert_eq!(node.properties["validationResults"].value, json!([]));
+    }
+    assert_eq!(tree.node(sibling.id), Some(&sibling));
+    Ok(())
+}

@@ -94,7 +94,12 @@ The snapshot expands collection templates and keeps actions for event dispatch.
 Read a new snapshot after the surface data changes.
 
 Register renderer function handlers with `LocalFunctions::insert`.
-Use `basic_catalog::register_validation_functions` to register `required`, `email`, `and`, `or`, and `not` for the v1.0 Basic Catalog.
+Use `basic_catalog::register_validation_functions` for the v1.0 Basic Catalog.
+It registers `required`, `email`, `numeric`, `length`, `regex`, `and`, `or`, and `not`.
+`numeric` compares the resolved `DynamicNumber` with inclusive bounds.
+The protocol converts an invalid numeric binding to zero.
+`length` counts Unicode code points in the resolved string.
+`regex` checks the A2UI dialect and safety rules before it matches a value.
 Use the catalog ID and function name for each registration.
 The processor checks calls against the catalog schemas before it invokes handlers.
 The SDK evaluates `formatString` and the collection function `@index`.
