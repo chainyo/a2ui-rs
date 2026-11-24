@@ -100,6 +100,14 @@ The RPC fixtures exercise errors in mounted checks and action pipelines.
 Check cases compare the validation result and the correlated renderer error.
 Action cases compare the surface data and the correlated renderer error.
 
+## Event actions
+
+The mounted event cases check scoped context, escaped keys, and dispatch metadata.
+The direct dispatch case checks the error for a non-string `userMessage`.
+The Basic Catalog rejects a missing event name before it stores the component.
+The missing-name fixture expects `INVALID_ACTION` during dispatch.
+The harness verifies catalog rejection and keeps the dispatch assertion pending.
+
 ## Check rule message precedence
 
 The v1.0 protocol uses a failed function's message when the function supplies one.
