@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::catalog::{Catalog, CatalogError};
+use crate::catalog::{Catalog, CatalogError, CatalogRegistry, CatalogView};
 use crate::data_model::DataError;
 use crate::expression::{Expression, is_identifier, parse_template};
 use crate::protocol::{
@@ -55,7 +55,7 @@ impl ValidationConfig {
 #[derive(Default)]
 pub struct MessageProcessor {
     store: SurfaceStore,
-    pub(crate) catalogs: BTreeMap<String, Catalog>,
+    catalogs: CatalogRegistry,
     config: ValidationConfig,
 }
 
@@ -69,21 +69,23 @@ impl MessageProcessor {
         }
     }
 
-    /// Registers a catalog.
+    /// Registers a catalog. New surfaces can use the catalog.
+    /// Active surfaces keep the catalogs available when they were created.
     ///
     /// # Errors
     /// Returns an error if a catalog with the same ID is already registered.
     pub fn add_catalog(&mut self, catalog: Catalog) -> Result<(), ValidationError> {
-        let id = catalog.id().to_owned();
-        match self.catalogs.entry(id) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(catalog);
-                Ok(())
-            }
-            std::collections::btree_map::Entry::Occupied(entry) => {
-                Err(ValidationError::DuplicateCatalog(entry.key().clone()))
-            }
-        }
+        self.catalogs
+            .insert(catalog)
+            .map_err(ValidationError::DuplicateCatalog)
+    }
+
+    pub(crate) fn current_catalogs(&self) -> CatalogView<'_> {
+        self.catalogs.current()
+    }
+
+    pub(crate) fn surface_catalogs(&self, surface: &Surface) -> CatalogView<'_> {
+        self.catalogs.view(surface.catalog_count())
     }
 
     /// Returns the active surface with this ID, if it exists.
@@ -106,7 +108,7 @@ impl MessageProcessor {
         let surface = self
             .get(surface_id)
             .ok_or_else(|| SurfaceError::UnknownSurface(surface_id.to_owned()))?;
-        Resolver::new(surface, &self.catalogs, functions).value(scope, value)
+        Resolver::new(surface, self.surface_catalogs(surface), functions).value(scope, value)
     }
 
     /// Resolves a snapshot of the component instances below the root.
@@ -121,7 +123,7 @@ impl MessageProcessor {
         let surface = self
             .get(surface_id)
             .ok_or_else(|| SurfaceError::UnknownSurface(surface_id.to_owned()))?;
-        Resolver::new(surface, &self.catalogs, functions).component_tree(surface)
+        Resolver::new(surface, self.surface_catalogs(surface), functions).component_tree(surface)
     }
 
     /// Writes a bound value to the surface data model.
@@ -170,17 +172,22 @@ impl MessageProcessor {
                     return Err(SurfaceError::DuplicateSurface(create.surface_id.clone()).into());
                 }
                 if let Some(id) = create.catalog_id.as_deref() {
-                    self.catalog(Some(id))?;
+                    self.current_catalogs().require(Some(id))?;
                 }
                 if let Some(components) = &create.components {
-                    self.validate_batch(create.catalog_id.as_deref(), &[], components, config)?;
+                    self.current_catalogs().validate_batch(
+                        create.catalog_id.as_deref(),
+                        &[],
+                        components,
+                        config,
+                    )?;
                 }
             }
             AgentToRenderer::UpdateComponents(update) => {
                 let surface = self
                     .get(&update.surface_id)
                     .ok_or_else(|| SurfaceError::UnknownSurface(update.surface_id.clone()))?;
-                self.validate_batch(
+                self.surface_catalogs(surface).validate_batch(
                     surface.catalog_id(),
                     surface.components(),
                     &update.components,
@@ -189,14 +196,16 @@ impl MessageProcessor {
             }
             _ => {}
         }
-        self.store.apply(message)?;
+        self.store
+            .apply_with_catalog_count(message, self.catalogs.len())?;
         Ok(())
     }
+}
 
-    fn catalog(&self, id: Option<&str>) -> Result<&Catalog, ValidationError> {
+impl CatalogView<'_> {
+    fn require(&self, id: Option<&str>) -> Result<&Catalog, ValidationError> {
         let id = id.ok_or(ValidationError::MissingCatalog)?;
-        self.catalogs
-            .get(id)
+        self.get(id)
             .ok_or_else(|| ValidationError::UnknownCatalog(id.to_owned()))
     }
 
@@ -225,7 +234,7 @@ impl MessageProcessor {
                     path: format!("{base}/id"),
                 });
             }
-            let catalog = self.catalog(component.catalog_id.as_deref().or(default_catalog))?;
+            let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
             let result = catalog.validate_component_at(component, Some(&base));
             match result {
                 Err(CatalogError::UnknownEntry(name)) if !config.allow_unknown_elements => {
@@ -252,7 +261,7 @@ impl MessageProcessor {
             .filter(|item| !pending.contains_key(item.id.as_str()))
             .chain(pending.values().map(|&(_, component)| component))
         {
-            let catalog = self.catalog(component.catalog_id.as_deref().or(default_catalog))?;
+            let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
             let schema = catalog.component_schema(&component.component);
             let payload = Value::Object(component.properties.clone().into_iter().collect());
             let children = catalog
@@ -311,7 +320,7 @@ impl MessageProcessor {
         validate_call_shape(call)
             .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
         if call.name != "@index" {
-            let catalog = self.catalog(
+            let catalog = self.require(
                 call.catalog_id
                     .as_deref()
                     .or(template_catalog)

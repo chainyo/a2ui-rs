@@ -7,7 +7,7 @@ use super::{
     ACCESSIBILITY_PROPERTY, Evaluation, EvaluationId, EvaluationState, RoutingError,
     RoutingSession, RoutingUpdate, Task,
 };
-use crate::catalog::{Catalog, PropertyKind};
+use crate::catalog::{CatalogView, PropertyKind};
 use crate::data_model::DataModel;
 use crate::protocol::Metadata;
 use crate::resolution::DataScope;
@@ -323,7 +323,7 @@ impl RoutingSession<'_> {
             return;
         };
         if layout_changed {
-            tree.definitions = definitions(model, &processor.catalogs);
+            tree.definitions = definitions(model, processor.surface_catalogs(model));
             tree.has_collections = tree.definitions.values().any(|definition| {
                 definition
                     .children
@@ -505,10 +505,7 @@ struct ChildDefinition {
     collection: Option<String>,
 }
 
-fn definitions(
-    surface: &Surface,
-    catalogs: &BTreeMap<String, Catalog>,
-) -> BTreeMap<String, Definition> {
+fn definitions(surface: &Surface, catalogs: CatalogView<'_>) -> BTreeMap<String, Definition> {
     surface
         .components()
         .iter()

@@ -55,6 +55,10 @@ After a delete, a create message can use the same surface ID.
 
 Load each v1.0 catalog with `Catalog::from_json`. Supply the v1.0 common types schema.
 Register each catalog with `MessageProcessor::add_catalog`.
+Each new surface can use the catalogs registered at its creation.
+When you register a catalog, existing surfaces keep their catalog set.
+A duplicate catalog ID causes an error. The original catalog stays registered.
+
 Pass decoded messages to `MessageProcessor::apply` to validate them before storage.
 The processor uses the catalog ID on the component or function call.
 If the ID is absent, the processor uses the surface default.

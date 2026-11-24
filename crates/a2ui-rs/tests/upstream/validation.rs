@@ -59,6 +59,16 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
 }
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
+    if suite == "core/add_catalog.yaml" {
+        return case.action == "process_messages"
+            && case.protocol_version.as_deref() == Some("1.0")
+            && matches!(
+                case.name.as_str(),
+                "test_add_catalog_resolves_later_create_surface"
+                    | "test_add_catalog_keeps_catalogs_of_earlier_surface"
+                    | "test_add_catalog_rejects_held_catalog_id"
+            );
+    }
     if supports_transaction(suite, case) {
         return true;
     }
@@ -176,6 +186,9 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             )?)?;
         }
     }
+    if suite == "core/add_catalog.yaml" {
+        return execute_catalog_steps(upstream, case, &common, &mut processor);
+    }
     if let Some(document) = &case.catalog {
         let mut document = catalog_document(case, document)?;
         if case.name.starts_with("test_composition_") {
@@ -233,6 +246,64 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         assert_state(&processor, expect)?;
     }
     Ok(())
+}
+
+fn execute_catalog_steps(
+    upstream: &Path,
+    case: &Case,
+    common: &Value,
+    processor: &mut MessageProcessor,
+) -> Result<(), TestError> {
+    if case.steps.is_empty() {
+        return Err("missing catalog steps".into());
+    }
+    for step in &case.steps {
+        let expected = step.get("expectError");
+        let paths: Vec<String> = step
+            .get("addCatalogPaths")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        if let Some(mut messages) = step.get("messages").cloned() {
+            for path in &paths {
+                processor.add_catalog(Catalog::from_json(read_json(upstream, path)?, common)?)?;
+            }
+            if case.name == "test_add_catalog_keeps_catalogs_of_earlier_surface"
+                && expected.is_some()
+            {
+                let component = messages
+                    .pointer_mut("/0/updateComponents/components/0")
+                    .and_then(Value::as_object_mut)
+                    .ok_or("missing component with a catalog override")?;
+                // Use the v1.0 envelope key for the fixture's catalog override.
+                let catalog = component
+                    .remove("catalogId")
+                    .ok_or("missing fixture catalog override")?;
+                if component.insert("@catalogId".to_owned(), catalog).is_some() {
+                    return Err("fixture has two catalog overrides".into());
+                }
+            }
+            apply_messages(processor, case, &messages, None, expected, true)?;
+        } else {
+            let [path] = paths.as_slice() else {
+                return Err("expected one catalog registration".into());
+            };
+            let catalog = Catalog::from_json(read_json(upstream, path)?, common)?;
+            let id = catalog.id().to_owned();
+            match (&processor.add_catalog(catalog), expected) {
+                (Err(error @ ValidationError::DuplicateCatalog(duplicate)), Some(expected))
+                    if duplicate == &id =>
+                {
+                    assert_rejection(expected, "CatalogError", None, &error.to_string())?;
+                }
+                result => return Err(format!("unexpected registration outcome: {result:?}").into()),
+            }
+        }
+    }
+    case.expect
+        .as_ref()
+        .map_or(Ok(()), |expected| assert_state(processor, expected))
 }
 
 fn apply_messages(

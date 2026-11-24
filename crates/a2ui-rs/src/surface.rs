@@ -12,6 +12,7 @@ use crate::protocol::{AgentToRenderer, AgentToRendererMessage, Component, Compon
 #[derive(Clone, Debug, PartialEq)]
 pub struct Surface {
     catalog_id: Option<String>,
+    catalog_count: usize,
     send_data_model: bool,
     components: Vec<Component>,
     component_indices: BTreeMap<String, usize>,
@@ -24,6 +25,10 @@ impl Surface {
     #[must_use]
     pub fn catalog_id(&self) -> Option<&str> {
         self.catalog_id.as_deref()
+    }
+
+    pub(crate) fn catalog_count(&self) -> usize {
+        self.catalog_count
     }
 
     /// Returns the data model flag for outgoing transport metadata.
@@ -101,6 +106,14 @@ impl SurfaceStore {
     /// surface, an invalid data update, or an unsupported operation.
     /// An error leaves the store unchanged.
     pub fn apply(&mut self, message: AgentToRendererMessage) -> Result<(), SurfaceError> {
+        self.apply_with_catalog_count(message, 0)
+    }
+
+    pub(crate) fn apply_with_catalog_count(
+        &mut self,
+        message: AgentToRendererMessage,
+        catalog_count: usize,
+    ) -> Result<(), SurfaceError> {
         let AgentToRendererMessage::V1(operation) = message;
         match operation {
             AgentToRenderer::CreateSurface(create) => {
@@ -111,6 +124,7 @@ impl SurfaceStore {
                     Entry::Vacant(entry) => {
                         let mut surface = Surface {
                             catalog_id: create.catalog_id,
+                            catalog_count,
                             send_data_model: create.send_data_model.unwrap_or_default(),
                             components: Vec::new(),
                             component_indices: BTreeMap::new(),

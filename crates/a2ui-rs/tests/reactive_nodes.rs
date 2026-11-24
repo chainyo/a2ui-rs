@@ -1,4 +1,4 @@
-//! Tests identity and disposal of explicit component children.
+//! Tests mounted trees with explicit component children.
 
 use std::error::Error;
 use std::fs;
@@ -9,9 +9,62 @@ use a2ui_rs::catalog::Catalog;
 use a2ui_rs::protocol::AgentToRendererMessage;
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::routing::{NodeChangeKind, NodeId, RoutingSession, RoutingUpdate};
-use a2ui_rs::rpc::RpcHandler;
-use a2ui_rs::validation::{MessageProcessor, ValidationConfig};
+use a2ui_rs::rpc::{ReceiveError, RpcHandler};
+use a2ui_rs::validation::{MessageProcessor, ValidationConfig, ValidationError};
 use serde_json::{Value, json};
+
+#[test]
+fn mixes_catalogs_available_when_the_surface_was_created() -> Result<(), Box<dyn Error>> {
+    let mut session = session(false)?;
+    let now = Instant::now();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../fixtures/local/surface-catalog-availability.json"
+    ))?;
+    session.mount_tree("shipment");
+    receive(
+        &mut session,
+        now,
+        serde_json::from_value(fixture["create"].clone())?,
+    )?;
+    let earlier_layout = layout(&session)?;
+    assert_eq!(earlier_layout.1.len(), 1);
+
+    let upstream = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/upstream");
+    let common = serde_json::from_slice(&fs::read(
+        upstream.join("specification/v1_0/json/common_types.json"),
+    )?)?;
+    session.add_catalog(Catalog::from_json(fixture["catalog"].clone(), &common)?)?;
+    let rejected = session.receive(serde_json::from_value(fixture["update"].clone())?, now);
+    assert!(matches!(
+        rejected,
+        Err(ReceiveError::Validation(ValidationError::UnknownCatalog(id)))
+            if id == "example/shipping"
+    ));
+    assert!(session.advance(now, None).nodes.is_empty());
+    assert_eq!(layout(&session)?, earlier_layout);
+
+    let mut create = fixture["create"].clone();
+    create["createSurface"]["surfaceId"] = json!("later-shipment");
+    let mut update = fixture["update"].clone();
+    update["updateComponents"]["surfaceId"] = json!("later-shipment");
+    session.mount_tree("later-shipment");
+    receive(&mut session, now, serde_json::from_value(create)?)?;
+    receive(&mut session, now, serde_json::from_value(update)?)?;
+    let tree = session.node_tree("later-shipment").ok_or("missing tree")?;
+    let root = tree
+        .node(tree.root().ok_or("missing root ID")?)
+        .ok_or("missing root")?;
+    let [destination, badge] = root.children.as_slice() else {
+        return Err("expected two mounted children".into());
+    };
+    let destination = tree.node(destination.id).ok_or("missing destination")?;
+    let badge = tree.node(badge.id).ok_or("missing delivery badge")?;
+    assert_eq!(destination.component, "Text");
+    assert_eq!(destination.properties["text"].value, json!("London"));
+    assert_eq!(badge.component, "DeliveryBadge");
+    assert_eq!(badge.properties["label"].value, json!("Express delivery"));
+    Ok(())
+}
 
 #[test]
 fn retains_reordered_children_and_disposes_removed_instances() -> Result<(), Box<dyn Error>> {

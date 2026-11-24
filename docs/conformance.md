@@ -112,6 +112,12 @@ The catalog lookup cases check unknown catalog IDs and absent surface defaults.
 The incompatible catalog case checks registration rejection and the error for a v1.0 surface request.
 The incoming envelope cases check the field path or function call ID in the renderer error.
 
+## Catalog registration
+
+The `add_catalog` cases register a catalog between messages and check which surfaces can use it.
+The case for an earlier surface uses `catalogId` for a component override.
+The harness passes that override as `@catalogId`, the v1.0 component envelope field.
+
 ## Event actions
 
 The mounted event cases check scoped context, escaped keys, and dispatch metadata.
