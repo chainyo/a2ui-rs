@@ -119,7 +119,9 @@ impl Tick<'_, '_, '_> {
             | Task::FunctionAction { call: value, .. } => {
                 self.resolve(&mut context, value, &location, &BTreeMap::new())
             }
-            Task::CheckRule { component, index } => self
+            Task::CheckRule {
+                component, index, ..
+            } => self
                 .check_rule(context.surface, component, *index)
                 .and_then(|rule| {
                     mounted_rule = rule;

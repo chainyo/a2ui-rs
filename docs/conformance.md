@@ -18,6 +18,7 @@ The harness checks the initial node, bound values, and update counts as messages
 The collection case writes through a node binding and checks sibling values and node IDs.
 Mounted action cases check catalog action properties and metadata on emitted events.
 Node metadata cases compare property and metadata notification counts for the same node IDs.
+The mounted validation case checks warning and info results in the node's properties.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
 It compares the JSON value before and after serialization for each valid input.
 An invalid input must fail deserialization.

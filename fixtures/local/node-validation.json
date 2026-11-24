@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "shipments",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {
+      "shipments": [
+        {"name": "London", "confirmed": false, "advisory": true},
+        {
+          "name": "Bristol",
+          "confirmed": false,
+          "advisory": {"valid": false, "code": "STANDARD_ONLY", "severity": "warning", "message": "Use standard delivery"}
+        }
+      ]
+    },
+    "components": [
+      {"id": "root", "component": "Column", "children": {"componentId": "confirmation", "path": "/shipments"}},
+      {
+        "id": "confirmation",
+        "component": "CheckBox",
+        "label": {"@path": "name"},
+        "value": {"@path": "confirmed"},
+        "@checks": [
+          {"condition": {"@path": "confirmed"}, "message": "Confirm this shipment"},
+          {"condition": {"@path": "advisory"}}
+        ]
+      }
+    ]
+  }
+}

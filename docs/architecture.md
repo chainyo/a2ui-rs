@@ -171,6 +171,11 @@ Read the component's `@metadata` envelope from `MountedNode::metadata`.
 An update that omits `@metadata` clears the node's metadata.
 A catalog property named `metadata` stays in the node's properties.
 
+The session evaluates `@checks` in each mounted node's data scope.
+Read `isValid`, `validationErrors`, and `validationResults` from the node's properties.
+Error results make the node invalid. Warning and info results remain in `validationResults`.
+The session reports a validation change as a property update.
+
 Use `MountedProperty::is_action` to find action properties.
 Call `dispatch_node_action` with the node ID and property name.
 The session resolves arguments in the node's scope when it runs the action.
