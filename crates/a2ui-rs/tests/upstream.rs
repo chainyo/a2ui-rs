@@ -246,7 +246,9 @@ fn is_data_model_suite(suite: &str) -> bool {
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
 fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
-    if events::missing_event_name(suite, case) {
+    if validation::pending_transaction_error(suite, case) {
+        Some("Core rejection and rollback passed. The renderer error envelope remains pending.")
+    } else if events::missing_event_name(suite, case) {
         Some(
             "Catalog validation rejects the missing name. The fixture expects INVALID_ACTION at dispatch.",
         )
@@ -290,7 +292,6 @@ fn supports_case(suite: &str, case: &Case) -> bool {
                     | "test_v10_create_surface_theme_rejected_strict"
                     | "test_batch_multi_stage_lifecycle_pipeline"
                     | "test_update_components_on_deleted_surface_error"
-                    | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
                     | "test_v10_update_components_stores_at_prefixed_component_metadata"
                     | "test_v10_update_components_rejects_null_at_catalog_id"
             );
@@ -321,7 +322,7 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
     } else if nodes::supports(suite, case) {
         nodes::execute(upstream, case)
     } else if validation::supports(suite, case) {
-        validation::execute(upstream, case)
+        validation::execute(upstream, suite, case)
     } else if resolution::supports(suite, case) {
         resolution::execute(upstream, suite, case)
     } else if rpc::supports(suite, case) {

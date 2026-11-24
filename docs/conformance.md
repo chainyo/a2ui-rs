@@ -100,6 +100,13 @@ The RPC fixtures exercise errors in mounted checks and action pipelines.
 Check cases compare the validation result and the correlated renderer error.
 Action cases compare the surface data and the correlated renderer error.
 
+## Validation transactions
+
+The processor cases check permissive streaming and validation rules for one message.
+The harness compares the surface before and after a rejected update.
+The duplicate-ID and cycle fixtures also require a renderer error envelope.
+The harness verifies rejection and rollback. It keeps the renderer error assertions pending.
+
 ## Event actions
 
 The mounted event cases check scoped context, escaped keys, and dispatch metadata.
