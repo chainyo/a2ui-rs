@@ -18,6 +18,14 @@ mod multi_catalog;
 
 const MULTI_CATALOG_SUITE: &str = "core/multi_catalog.yaml";
 
+pub(super) fn uses_v1_format_string_fixture(case: &Case) -> bool {
+    matches!(
+        case.name.as_str(),
+        "test_evaluate_function_format_string_basic"
+            | "test_evaluate_function_format_string_null_coercion"
+    )
+}
+
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
     if suite == MULTI_CATALOG_SUITE {
         return match case.action.as_str() {
@@ -49,21 +57,20 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         {
             return true;
         }
-        return matches!(
-            case.name.as_str(),
-            "test_evaluate_function_format_string_basic"
-                | "test_evaluate_function_format_string_null_coercion"
-                | "test_evaluate_function_v10_runs_in_named_catalog"
-                | "test_evaluate_function_v10_runs_in_named_catalog_on_surface_without_default"
-                | "test_evaluate_function_v10_runs_in_surface_default"
-                | "test_evaluate_function_v10_without_catalog_id_on_surface_without_default_errors"
-                | "test_evaluate_function_v10_unknown_catalog_id_errors"
-                | "test_evaluate_function_v10_nested_call_does_not_inherit_catalog"
-                | "test_evaluate_function_v10_format_string_template_call_missing_in_inherited_catalog_errors"
-                | "test_evaluate_function_v10_format_string_index_stays_catalogless_without_default"
-                | "test_evaluate_function_v10_validation_result_coerced_in_not_operand_on_surface"
-                | "test_evaluate_function_v10_validation_result_coerced_in_and_operands_on_surface"
-        );
+        return uses_v1_format_string_fixture(case)
+            || matches!(
+                case.name.as_str(),
+                "test_evaluate_function_v10_runs_in_named_catalog"
+                    | "test_evaluate_function_v10_runs_in_named_catalog_on_surface_without_default"
+                    | "test_evaluate_function_v10_runs_in_surface_default"
+                    | "test_evaluate_function_v10_without_catalog_id_on_surface_without_default_errors"
+                    | "test_evaluate_function_v10_unknown_catalog_id_errors"
+                    | "test_evaluate_function_v10_nested_call_does_not_inherit_catalog"
+                    | "test_evaluate_function_v10_format_string_template_call_missing_in_inherited_catalog_errors"
+                    | "test_evaluate_function_v10_format_string_index_stays_catalogless_without_default"
+                    | "test_evaluate_function_v10_validation_result_coerced_in_not_operand_on_surface"
+                    | "test_evaluate_function_v10_validation_result_coerced_in_and_operands_on_surface"
+            );
     }
     let version = case
         .catalog

@@ -8,16 +8,15 @@ use std::process::Command;
 use std::thread;
 
 use a2ui_rs::data_model::DataModel;
-use a2ui_rs::protocol::{
-    AgentToRenderer, AgentToRendererMessage, Component, Extensions, FunctionResponse,
-};
+use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage, Component};
 use a2ui_rs::surface::{SurfaceError, SurfaceStore};
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[path = "upstream/accessibility.rs"]
 mod accessibility;
+#[path = "upstream/common_types.rs"]
+mod common_types;
 #[path = "upstream/events.rs"]
 mod events;
 #[path = "upstream/nodes.rs"]
@@ -274,6 +273,7 @@ fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
 
 fn supports_case(suite: &str, case: &Case) -> bool {
     if accessibility::supports(suite, case)
+        || common_types::supports(suite, case)
         || events::supports(suite, case)
         || nodes::supports(suite, case)
         || validation::supports(suite, case)
@@ -287,21 +287,13 @@ fn supports_case(suite: &str, case: &Case) -> bool {
         return supports_direct_surface_case(case);
     }
 
-    if is_data_model_suite(suite) {
-        return case.action == "validate"
-            && case
-                .catalog
-                .as_ref()
-                .and_then(|catalog| catalog["protocolVersion"].as_str())
-                == Some("1.0");
-    }
-    suite == "core/common_types.yaml"
-        && case.protocol_version.as_deref() == Some("1.0")
-        && case.action == "validate_common_type"
-        && matches!(
-            case.definition.as_deref(),
-            Some("FunctionResponse" | "Extensions")
-        )
+    is_data_model_suite(suite)
+        && case.action == "validate"
+        && case
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog["protocolVersion"].as_str())
+            == Some("1.0")
 }
 
 fn supports_direct_surface_case(case: &Case) -> bool {
@@ -328,6 +320,8 @@ fn supports_direct_surface_case(case: &Case) -> bool {
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     if accessibility::supports(suite, case) {
         accessibility::execute(upstream, case)
+    } else if common_types::supports(suite, case) {
+        common_types::execute(upstream, case)
     } else if events::supports(suite, case) {
         events::execute(upstream, case)
     } else if nodes::supports(suite, case) {
@@ -345,7 +339,7 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
     } else if suite == SURFACE_SUITE {
         execute_surface_case(case)
     } else {
-        execute_case(case)
+        Err("unsupported conformance case reached execution".into())
     }
 }
 
@@ -545,36 +539,6 @@ fn execute_data_model_case(case: &Case) -> Result<(), TestError> {
     Ok(())
 }
 
-fn execute_case(case: &Case) -> Result<(), TestError> {
-    if case.steps.is_empty() {
-        return Err("supported case has no steps".into());
-    }
-    for step in &case.steps {
-        match case.definition.as_deref() {
-            Some("FunctionResponse") => validate_step::<FunctionResponse>(step)?,
-            Some("Extensions") => validate_step::<Extensions>(step)?,
-            _ => return Err("unsupported definition reached execution".into()),
-        }
-    }
-    Ok(())
-}
-
-fn validate_step<T: DeserializeOwned + Serialize>(step: &Value) -> Result<(), TestError> {
-    let value = step.get("value").ok_or("step has no value")?;
-    let native = serde_json::from_value::<T>(value.clone());
-    if let Some(expected) = step.get("expectError") {
-        if expected.get("category").and_then(Value::as_str) != Some("ValidationError") {
-            return Err("unsupported error expectation".into());
-        }
-        if native.is_ok() {
-            return Err(format!("accepted invalid input: {value}").into());
-        }
-    } else if serde_json::to_value(native?)? != *value {
-        return Err("serialization did not preserve the JSON value".into());
-    }
-    Ok(())
-}
-
 fn verify_submodule(root: &Path) -> Result<String, TestError> {
     let entry = git_output(root, &["ls-files", "--stage", "--", "fixtures/upstream"])?;
     let fields: Vec<_> = entry.split_whitespace().collect();
@@ -625,6 +589,17 @@ fn is_legacy_case(suite: &str, case: &Case) -> bool {
                     .as_ref()
                     .and_then(|expect| expect["protocolVersion"].as_str()),
             )
+        }
+        ("core/functions.yaml", _) if case.action == "evaluate_function" => {
+            case.protocol_version.is_none()
+                && case.catalog.is_none()
+                && case.catalog_id.is_none()
+                && case.catalog_path.is_none()
+                && case.catalog_paths.is_empty()
+                && case.catalogs.is_none()
+                && case.surface.is_none()
+                && case.builtin_catalog.is_none()
+                && !resolution::uses_v1_format_string_fixture(case)
         }
         ("core/actions.yaml", "test_action_direct_name_shorthand") => {
             case.protocol_version.is_none()
@@ -751,5 +726,28 @@ fn catalog_versions_apply_when_the_case_omits_its_version() -> Result<(), TestEr
         case_protocol_version("core/error_responses.yaml", &cases[0]),
         None
     );
+    Ok(())
+}
+
+#[test]
+fn unversioned_standalone_function_cases_use_the_legacy_default() -> Result<(), TestError> {
+    let cases = parse_cases(
+        r#"
+- name: standalone
+  action: evaluate_function
+- name: versioned
+  action: evaluate_function
+  protocolVersion: "1.0"
+- name: catalog_override
+  action: evaluate_function
+  catalogPaths: ["catalogs/basic/v1/catalog.json"]
+- name: test_evaluate_function_format_string_basic
+  action: evaluate_function
+"#,
+    )?;
+    assert!(is_legacy_case("core/functions.yaml", &cases[0]));
+    for case in &cases[1..] {
+        assert!(!is_legacy_case("core/functions.yaml", case));
+    }
     Ok(())
 }
