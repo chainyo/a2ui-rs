@@ -94,6 +94,7 @@ The snapshot expands collection templates and keeps actions for event dispatch.
 Read a new snapshot after the surface data changes.
 
 Register renderer function handlers with `LocalFunctions::insert`.
+Use `basic_catalog::register_validation_functions` to register `email`, `and`, `or`, and `not` for the v1.0 Basic Catalog.
 Use the catalog ID and function name for each registration.
 The processor checks calls against the catalog schemas before it invokes handlers.
 The SDK evaluates `formatString` and the collection function `@index`.

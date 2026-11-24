@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+use a2ui_rs::basic_catalog::register_validation_functions;
 use a2ui_rs::catalog::Catalog;
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::routing::{EvaluationId, EvaluationState, RoutingSession};
@@ -256,47 +257,89 @@ fn basic_catalog(upstream: &Path, catalog_id: &str) -> Result<(Value, Value), Te
 pub(super) fn supports_check_metadata(suite: &str, case: &Case) -> bool {
     suite == "core/validation_result.yaml"
         && case.action == "validate"
-        && case.name == "test_validation_result_warning_and_info_non_blocking"
+        && case
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog["protocolVersion"].as_str())
+            == Some("1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_validation_result_warning_and_info_non_blocking"
+                | "test_validation_result_dynamic_object_return"
+                | "test_validation_result_reactive_recovery_on_data_update"
+                | "test_validation_result_coercion_in_logical_and_or_not"
+        )
 }
 
 pub(super) fn execute_check_metadata(upstream: &Path, case: &Case) -> Result<(), TestError> {
-    let [step] = case.steps.as_slice() else {
-        return Err("expected one check scenario step".into());
-    };
-    let [message] = step["payload"]
-        .as_array()
-        .ok_or("missing payload")?
-        .as_slice()
-    else {
-        return Err("expected one createSurface message".into());
-    };
-    let create = &message["createSurface"];
+    let first = case.steps.first().ok_or("missing check steps")?;
+    let create = &first["payload"][0]["createSurface"];
     let surface = create["surfaceId"].as_str().ok_or("missing surface ID")?;
     let catalog_id = create["catalogId"].as_str().ok_or("missing catalog ID")?;
     let (catalog, common) = basic_catalog(upstream, catalog_id)?;
-    let mut session = RoutingSession::new(RpcHandler::default(), LocalFunctions::default());
+    let mut functions = LocalFunctions::default();
+    register_validation_functions(&mut functions, catalog_id);
+    let mut session = RoutingSession::new(RpcHandler::default(), functions);
     session.add_catalog(Catalog::from_json(catalog, &common)?)?;
     let now = Instant::now();
     session.mount_tree(surface);
-    receive(&mut session, message.clone(), now)?;
-    let update = session.advance(now, None);
-    if !update.errors.is_empty() {
-        return Err(format!("unexpected check errors: {:?}", update.errors).into());
+
+    for step in &case.steps {
+        for message in step["payload"].as_array().ok_or("missing check messages")? {
+            receive(&mut session, message.clone(), now)?;
+            let update = session.advance(now, None);
+            if !update.errors.is_empty() {
+                return Err(format!("unexpected check errors: {:?}", update.errors).into());
+            }
+        }
+        if let Some(expected) = step.get("expect") {
+            assert_check_properties(&session, surface, expected)?;
+        }
     }
-    let expected = &case.expect.as_ref().ok_or("missing expectations")?["surfaces"][surface];
+    if let Some(expected) = &case.expect {
+        assert_check_properties(&session, surface, expected)?;
+    }
+    Ok(())
+}
+
+fn assert_check_properties(
+    session: &RoutingSession<'_>,
+    surface: &str,
+    expected: &Value,
+) -> Result<(), TestError> {
+    let expected = &expected["surfaces"][surface];
     let tree = session.node_tree(surface).ok_or("missing mounted tree")?;
-    let root = tree
-        .root()
-        .and_then(|id| tree.node(id))
-        .ok_or("missing mounted root")?;
-    for name in ["isValid", "validationErrors", "validationResults"] {
-        let value = &root
-            .properties
-            .get(name)
-            .ok_or("missing validation property")?
-            .value;
-        if value != &expected[name][&root.component_id] {
-            return Err(format!("unexpected {name} on {}: {value}", root.component_id).into());
+    let mut pending = vec![tree.root().ok_or("missing mounted root")?];
+    let mut nodes = std::collections::BTreeMap::new();
+    while let Some(id) = pending.pop() {
+        let node = tree.node(id).ok_or("missing mounted node")?;
+        nodes.insert(node.component_id.as_str(), node);
+        pending.extend(node.children.iter().map(|child| child.id));
+    }
+    for name in [
+        "isValid",
+        "validationErrors",
+        "validationResults",
+        "validationResult",
+    ] {
+        for (id, expected) in expected[name].as_object().into_iter().flatten() {
+            let node = nodes.get(id.as_str()).ok_or("missing check component")?;
+            let value = if name == "validationResult" {
+                &node
+                    .properties
+                    .get("validationResults")
+                    .ok_or("missing check results")?
+                    .value[0]
+            } else {
+                &node
+                    .properties
+                    .get(name)
+                    .ok_or("missing validation property")?
+                    .value
+            };
+            if value != expected {
+                return Err(format!("unexpected {name} on {id}: {value}").into());
+            }
         }
     }
     Ok(())
