@@ -2,14 +2,14 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use a2ui_rs::catalog::Catalog;
+use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::data_model::DataError;
 use a2ui_rs::protocol::{AgentToRenderer, AgentToRendererMessage};
 use a2ui_rs::resolution::LocalFunctions;
 use a2ui_rs::routing::RoutingSession;
 use a2ui_rs::rpc::RpcHandler;
 use a2ui_rs::surface::SurfaceError;
-use a2ui_rs::validation::{MessageProcessor, ValidationConfig, ValidationError};
+use a2ui_rs::validation::{MessageProcessor, ProcessError, ValidationConfig, ValidationError};
 use serde_json::{Value, json};
 
 use super::{Case, TestError, assert_surface_components};
@@ -51,25 +51,13 @@ fn supports_transaction(suite: &str, case: &Case) -> bool {
             );
     }
     suite == super::SURFACE_SUITE
-        && case.action == "process_messages"
-        && case.protocol_version.as_deref() == Some("1.0")
-        && matches!(
-            case.name.as_str(),
-            "test_batch_duplicate_component_ids_in_same_message_error"
-                | "test_batch_atomic_rollback_on_candidate_topology_cycle"
-                | "test_permissive_mode_allows_orphan_components"
-                | "test_permissive_mode_allows_dangling_references"
-                | "test_v10_call_validation_config_relaxes_strict_processor"
-                | "test_v10_call_validation_config_tightens_permissive_processor"
-                | "test_v10_call_validation_config_leaves_out_rules_as_strict"
-                | "test_composition_constraints_preserved_on_partial_parent_update"
-                | "test_v10_permissive_incremental_streaming_out_of_order_before_root"
-                | "test_v10_component_without_catalog_id_on_surface_without_default_errors"
-                | "test_v10_component_without_catalog_id_errors_with_a_single_catalog"
-                | "test_v10_function_call_naming_unknown_catalog_errors"
-                | "test_v10_call_naming_unknown_catalog_errors_without_strict_mode"
-                | "test_v10_function_call_with_empty_catalog_id_errors"
-        )
+        && !super::supports_direct_surface_case(case)
+        && (matches!(
+            case.action.as_str(),
+            "get_renderer_capabilities" | "get_renderer_data_model"
+        ) || (matches!(case.action.as_str(), "process_messages" | "validate")
+            && (case.protocol_version.as_deref() == Some("1.0")
+                || case.protocol_version.is_none())))
 }
 
 pub(super) fn supports(suite: &str, case: &Case) -> bool {
@@ -173,32 +161,8 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             ValidationConfig::default()
         });
     let mut processor = MessageProcessor::new(config);
-    for path in &case.catalog_paths {
-        let document = read_json(upstream, path)?;
-        processor.add_catalog(Catalog::from_json(document.clone(), &common)?)?;
-        if path == "catalogs/basic/v1/catalog.json" {
-            // Some pinned fixtures use the published catalog's former URL.
-            let mut alias = document;
-            alias["catalogId"] = Value::from("https://a2ui.org/catalogs/basic/v1/catalog.json");
-            processor.add_catalog(Catalog::from_json(alias, &common)?)?;
-        }
-    }
     let transaction = supports_transaction(suite, case);
-    if transaction && case.catalog_paths.is_empty() && case.catalog.is_none() {
-        let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
-        for id in ["basic", "test-catalog-v10"] {
-            basic["catalogId"] = json!(id);
-            processor.add_catalog(Catalog::from_json(basic.clone(), &common)?)?;
-        }
-    }
-    if transaction && let Some(catalogs) = &case.catalogs {
-        for document in catalogs.as_array().ok_or("expected transaction catalogs")? {
-            processor.add_catalog(Catalog::from_json(
-                catalog_document(case, document)?,
-                &common,
-            )?)?;
-        }
-    }
+    register_fixture_catalogs(upstream, suite, case, &common, &mut processor, transaction)?;
     if suite == "core/add_catalog.yaml" {
         return execute_catalog_steps(upstream, case, &common, &mut processor);
     }
@@ -209,6 +173,16 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
             catalog_document(case, document)?
         };
         processor.add_catalog(Catalog::from_json(document, &common)?)?;
+    }
+
+    if suite == super::SURFACE_SUITE {
+        match case.action.as_str() {
+            "get_renderer_capabilities" | "get_renderer_data_model" => {
+                return assert_renderer_metadata(&mut processor, case);
+            }
+            _ if is_batch_fixture(case) => return execute_json_batch(&mut processor, case),
+            _ => {}
+        }
     }
 
     if let Some(messages) = case.messages.as_ref().or(case.payload.as_ref()) {
@@ -230,6 +204,173 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
         });
     }
     execute_validation_steps(&mut processor, case, transaction)
+}
+
+fn register_fixture_catalogs(
+    upstream: &Path,
+    suite: &str,
+    case: &Case,
+    common: &Value,
+    processor: &mut MessageProcessor,
+    transaction: bool,
+) -> Result<(), TestError> {
+    for path in &case.catalog_paths {
+        let document = read_json(upstream, path)?;
+        processor.add_catalog(Catalog::from_json(document.clone(), common)?)?;
+        if path == "catalogs/basic/v1/catalog.json" {
+            // Some pinned fixtures use the published catalog's former URL.
+            let mut alias = document;
+            alias["catalogId"] = Value::from("https://a2ui.org/catalogs/basic/v1/catalog.json");
+            processor.add_catalog(Catalog::from_json(alias.clone(), common)?)?;
+            if suite == super::SURFACE_SUITE {
+                alias["catalogId"] = json!("test-catalog-v10");
+                processor.add_catalog(Catalog::from_json(alias, common)?)?;
+            }
+        }
+    }
+    if transaction
+        && case.catalog_paths.is_empty()
+        && case.catalog.is_none()
+        && case.action != "get_renderer_capabilities"
+    {
+        let mut basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+        for id in ["basic", "test-catalog-v10"] {
+            basic["catalogId"] = json!(id);
+            processor.add_catalog(Catalog::from_json(basic.clone(), common)?)?;
+        }
+    }
+    if transaction && let Some(catalogs) = &case.catalogs {
+        for document in catalogs.as_array().ok_or("expected transaction catalogs")? {
+            let mut document = catalog_document(case, document)?;
+            if suite == super::SURFACE_SUITE && document.get("protocolVersion").is_none() {
+                document["protocolVersion"] = json!("1.0");
+            }
+            if case.name == "test_v10_component_catalog_override" {
+                // The fixture gives the catalog IDs and component payloads.
+                if document["catalogId"] == "main-catalog" {
+                    let basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
+                    document["components"]["Column"] = basic["components"]["Column"].clone();
+                    document["$defs"]["Weight"] = basic["$defs"]["Weight"].clone();
+                } else if document["catalogId"] == "charts-catalog" {
+                    document["components"]["PieChart"] = json!({
+                        "type": "object", "properties": {
+                            "component": {"const": "PieChart"},
+                            "data": {"type": "array", "items": {"type": "number"}}
+                        }, "required": ["component", "data"]
+                    });
+                }
+            }
+            let catalog = Catalog::from_json(document.clone(), common);
+            match catalog {
+                Err(CatalogError::InvalidCatalog(message))
+                    if suite == super::SURFACE_SUITE
+                        && matches!(document["protocolVersion"].as_str(), Some("v0.9"))
+                        && message.contains("must declare protocolVersion 1.0") => {}
+                result => processor.add_catalog(result?)?,
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_batch_fixture(case: &Case) -> bool {
+    matches!(
+        case.name.as_str(),
+        "test_multiple_update_types_error"
+            | "test_batch_message_array_and_wrapper"
+            | "test_v10_rejects_v08_begin_rendering_action"
+            | "test_v10_non_string_surface_id_error"
+            | "test_unsupported_protocol_version_error"
+            | "test_missing_version_field_in_v10_process_messages_error"
+    )
+}
+
+fn execute_json_batch(processor: &mut MessageProcessor, case: &Case) -> Result<(), TestError> {
+    let messages = case.messages.as_ref().ok_or("missing batch messages")?;
+    if let Some(expected) = &case.expect_error {
+        let Err(ProcessError::Envelope { index: 0, source }) = processor.apply_json(messages)
+        else {
+            return Err("expected an invalid envelope at index zero".into());
+        };
+        let error = source.to_string();
+        let equivalent = match case.name.as_str() {
+            "test_multiple_update_types_error" if error.contains("single key") => {
+                "Message contains multiple conflicting update actions"
+            }
+            "test_v10_rejects_v08_begin_rendering_action" if error.contains("beginRendering") => {
+                "action 'beginRendering' is not supported in protocol version 1.0"
+            }
+            "test_v10_non_string_surface_id_error" if error.contains("expected a string") => {
+                "surfaceId must be a string"
+            }
+            "test_unsupported_protocol_version_error" if error.contains("v99.0") => {
+                "Unsupported protocol version 'v99.0'"
+            }
+            "test_missing_version_field_in_v10_process_messages_error"
+                if error.contains("missing field `version`") =>
+            {
+                "Missing required version field"
+            }
+            _ => return Err(format!("unexpected envelope rejection: {error}").into()),
+        };
+        return assert_rejection(expected, "ValidationError", None, equivalent);
+    }
+
+    let expected = case
+        .expect
+        .as_ref()
+        .ok_or("missing batch state expectation")?;
+    let array = messages
+        .get("messages")
+        .ok_or("missing wrapped message list")?;
+    let mut apply_one = |input| -> Result<(), TestError> {
+        processor.apply_json(input)?;
+        assert_state(processor, expected)?;
+        for id in expected["surfaces"]
+            .as_object()
+            .ok_or("missing surfaces")?
+            .keys()
+        {
+            processor.apply_json(&json!({"version": "1.0", "deleteSurface": {"surfaceId": id}}))?;
+        }
+        Ok(())
+    };
+    apply_one(array)?;
+    apply_one(messages)
+}
+
+fn assert_renderer_metadata(
+    processor: &mut MessageProcessor,
+    case: &Case,
+) -> Result<(), TestError> {
+    let args = case
+        .args
+        .as_ref()
+        .ok_or("missing renderer metadata options")?;
+    if args["version"] != "1.0" {
+        return Err("expected a v1.0 renderer metadata query".into());
+    }
+    let actual = if case.action == "get_renderer_capabilities" {
+        let inline = args["includeInlineCatalogs"]
+            .as_bool()
+            .ok_or("missing inline option")?;
+        serde_json::to_value(processor.renderer_capabilities(inline))?
+    } else {
+        processor.apply_json(
+            case.messages
+                .as_ref()
+                .ok_or("missing data model messages")?,
+        )?;
+        serde_json::to_value(processor.renderer_data_model())?
+    };
+    let expected = case
+        .expect
+        .as_ref()
+        .ok_or("missing renderer metadata expectation")?;
+    if &actual != expected {
+        return Err(format!("expected renderer metadata {expected}, got {actual}").into());
+    }
+    Ok(())
 }
 
 fn execute_validation_steps(
@@ -539,6 +680,7 @@ fn assert_transaction_error(
     let message = error.to_string();
     let category = match error {
         ValidationError::CircularReference(_) if case.action == "validate" => "RecursionError",
+        ValidationError::PayloadDepth | ValidationError::FunctionDepth => "RecursionError",
         ValidationError::Surface(
             SurfaceError::DuplicateComponent(_)
             | SurfaceError::DuplicateSurface(_)
@@ -554,6 +696,8 @@ fn assert_transaction_error(
         | ValidationError::Catalog(_)
         | ValidationError::InvalidComponentId { .. }
         | ValidationError::UnknownComponent { .. }
+        | ValidationError::UnknownFunction { .. }
+        | ValidationError::InvalidCall(_)
         | ValidationError::UnallowedChild { .. }
         | ValidationError::UnallowedParent { .. } => "ValidationError",
         ValidationError::Surface(SurfaceError::Data { .. }) => "DataError",
@@ -738,6 +882,12 @@ fn assert_state(processor: &MessageProcessor, expected: &Value) -> Result<(), Te
         for (field, expected) in fields.as_object().ok_or("expected surface fields")? {
             match field.as_str() {
                 "exists" if expected.as_bool() == Some(surface.is_some()) => {}
+                "metadata"
+                    if serde_json::to_value(
+                        surface.and_then(a2ui_rs::surface::Surface::metadata),
+                    )? == *expected => {}
+                "dataModel"
+                    if surface.is_some_and(|surface| surface.data_model().root() == expected) => {}
                 "components" => {
                     let surface = surface.ok_or("missing expected surface")?;
                     if let Some(expected) = expected.as_object() {

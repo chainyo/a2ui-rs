@@ -194,6 +194,10 @@ impl Components {
         &self.0
     }
 
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [Component] {
+        &mut self.0
+    }
+
     pub(crate) fn into_vec(self) -> Vec<Component> {
         self.0
     }
@@ -668,6 +672,34 @@ pub enum ProtocolError {
     /// A metadata extension key was not a Unicode identifier.
     #[error("invalid extension identifier: {0}")]
     InvalidExtensionKey(String),
+}
+
+/// Renderer capabilities for the supported protocol version.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RendererCapabilities {
+    /// The capabilities for A2UI v1.0.
+    #[serde(rename = "1.0")]
+    pub v1_0: RendererCapabilitiesV1,
+}
+
+/// Catalogs that a renderer can use on a v1.0 surface.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererCapabilitiesV1 {
+    /// Catalog IDs in registration order.
+    pub supported_catalog_ids: Vec<String>,
+    /// Catalog definitions to send when the agent accepts them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_catalogs: Option<Vec<Value>>,
+}
+
+/// Data for active surfaces that request data model reporting.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RendererDataModel {
+    /// The protocol version of the surfaces.
+    pub version: crate::ProtocolVersion,
+    /// Current model values by surface ID.
+    pub surfaces: BTreeMap<String, Value>,
 }
 
 /// A typed `messages` list wrapper. Lists can be empty.

@@ -684,7 +684,7 @@ pub enum ResolveError {
     #[error("Catalog not found: {0}")]
     UnknownCatalog(String),
     /// The call has an invalid function or argument name.
-    #[error("Invalid local function name or arguments: '{0}'")]
+    #[error("Function and argument names must be valid UAX #31 identifiers: '{0}'")]
     InvalidFunction(String),
     /// The function can only run when the agent calls it.
     #[error("Function '{0}' is agentOnly")]

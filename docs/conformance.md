@@ -73,6 +73,7 @@ The tests use v1.0 references and classify dedicated legacy suites outside scope
 For Catalog, Data Model, and Data Context cases without a case version, the harness uses the catalog version.
 The harness also excludes fixtures that require successful use of a pre-v1.0 message, action format, or data model query.
 Rejection of an older message or catalog remains part of v1.0 coverage.
+Node fixtures that use a v0.9.1 setup catalog are outside scope.
 Upstream files retain their own license notices. Do not edit them inside this repository.
 
 Install Git before you run the inventory test. The test uses local Git metadata.

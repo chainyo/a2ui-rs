@@ -64,6 +64,10 @@ The processor uses the catalog ID on the component or function call.
 If the ID is absent, the processor uses the surface default.
 Schema validation uses only schemas in memory.
 
+A v1.0 component can use a bare `catalogId`, `metadata`, or `accessibility` during the protocol transition.
+The processor uses the component schema to distinguish a catalog property from an envelope field.
+The processor stores envelope fields with their v1.0 `@` names.
+
 The processor checks component relationships on the graph that would result from the message.
 The checks include parent and child rules, missing references, cycles, depth, and reachability from `root`.
 An error leaves the surface unchanged.
@@ -82,6 +86,17 @@ An invalid component field gives `VALIDATION_FAILED` at that field in the incomi
 Composition failures give `UNALLOWED_PARENT` or `UNALLOWED_CHILD`.
 When the rejected batch includes only one side of a relationship, the path points to that side.
 Other data model write errors give `DATA_ERROR`.
+
+## JSON message batches and renderer metadata
+
+Use `MessageProcessor::apply_json` for one message, an array, or a `messages` wrapper.
+The processor decodes the full input before it applies any message.
+It applies decoded messages in order and stops at the first validation error.
+Earlier successful messages stay applied.
+
+Use `MessageProcessor::renderer_capabilities` to get registered catalog IDs.
+Include inline catalogs when the agent accepts them.
+Use `MessageProcessor::renderer_data_model` to get data from active surfaces with `sendDataModel` enabled.
 
 ## Data model
 

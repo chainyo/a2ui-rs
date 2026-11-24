@@ -12,8 +12,9 @@ use crate::data_model::DataError;
 use crate::expression::{Expression, is_identifier, parse_template};
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
-    GenericError, RendererError, RendererToAgent, RendererToAgentMessage, UpdateDataModel,
-    ValidationCode, ValidationError as ProtocolValidationError,
+    GenericError, RendererCapabilities, RendererCapabilitiesV1, RendererDataModel, RendererError,
+    RendererToAgent, RendererToAgentMessage, UpdateDataModel, ValidationCode,
+    ValidationError as ProtocolValidationError,
 };
 use crate::resolution::{
     DataScope, LocalFunctions, ResolveError, ResolvedComponent, Resolver, validate_call_shape,
@@ -21,6 +22,7 @@ use crate::resolution::{
 use crate::surface::{Surface, SurfaceError, SurfaceStore};
 
 const MAX_COMPONENT_DEPTH: usize = 50;
+const MAX_PAYLOAD_DEPTH: usize = 50;
 const MAX_FUNCTION_DEPTH: usize = 5;
 
 /// Controls which incomplete component graphs a renderer accepts.
@@ -88,6 +90,45 @@ impl MessageProcessor {
         self.catalogs.view(surface.catalog_count())
     }
 
+    /// Returns the catalogs registered for v1.0.
+    ///
+    /// Set `include_inline_catalogs` when the agent accepts inline definitions.
+    #[must_use]
+    pub fn renderer_capabilities(&self, include_inline_catalogs: bool) -> RendererCapabilities {
+        let catalogs = self.catalogs.in_registration_order();
+        RendererCapabilities {
+            v1_0: RendererCapabilitiesV1 {
+                supported_catalog_ids: catalogs
+                    .iter()
+                    .map(|catalog| catalog.id().to_owned())
+                    .collect(),
+                inline_catalogs: include_inline_catalogs.then(|| {
+                    catalogs
+                        .iter()
+                        .map(|catalog| catalog.as_json().clone())
+                        .collect()
+                }),
+            },
+        }
+    }
+
+    /// Returns current data for surfaces with `sendDataModel` enabled.
+    ///
+    /// Returns `None` if no active surface requests data model reporting.
+    #[must_use]
+    pub fn renderer_data_model(&self) -> Option<RendererDataModel> {
+        let surfaces: BTreeMap<_, _> = self
+            .store
+            .iter()
+            .filter(|(_, surface)| surface.send_data_model())
+            .map(|(id, surface)| (id.to_owned(), surface.data_model().root().clone()))
+            .collect();
+        (!surfaces.is_empty()).then_some(RendererDataModel {
+            version: crate::ProtocolVersion::V1_0,
+            surfaces,
+        })
+    }
+
     /// Returns the active surface with this ID, if it exists.
     #[must_use]
     pub fn get(&self, surface_id: &str) -> Option<&Surface> {
@@ -146,6 +187,43 @@ impl MessageProcessor {
         ))
     }
 
+    /// Applies one JSON message, a message list, or a `messages` wrapper.
+    ///
+    /// Each message applies in order. Processing stops at the first state error.
+    /// Earlier successful messages stay applied.
+    ///
+    /// # Errors
+    /// Returns an error if the input fails to decode or a message fails validation.
+    /// A decode error leaves the entire batch unapplied.
+    pub fn apply_json(&mut self, input: &Value) -> Result<(), ProcessError> {
+        let messages = if let Some(messages) = input.as_array() {
+            messages.as_slice()
+        } else if let Some(object) = input.as_object()
+            && object.contains_key("messages")
+        {
+            object
+                .get("messages")
+                .filter(|_| object.len() == 1)
+                .and_then(Value::as_array)
+                .ok_or(ProcessError::InvalidBatch)?
+        } else {
+            std::slice::from_ref(input)
+        };
+        let decoded: Vec<AgentToRendererMessage> = messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| {
+                serde_json::from_value(message.clone())
+                    .map_err(|source| ProcessError::Envelope { index, source })
+            })
+            .collect::<Result<_, _>>()?;
+        for (index, message) in decoded.into_iter().enumerate() {
+            self.apply(message)
+                .map_err(|source| ProcessError::Validation { index, source })?;
+        }
+        Ok(())
+    }
+
     /// Validates and applies one protocol message.
     ///
     /// # Errors
@@ -162,10 +240,10 @@ impl MessageProcessor {
     /// An error leaves surface state unchanged.
     pub fn apply_with_config(
         &mut self,
-        message: AgentToRendererMessage,
+        mut message: AgentToRendererMessage,
         config: ValidationConfig,
     ) -> Result<(), ValidationError> {
-        let AgentToRendererMessage::V1(operation) = &message;
+        let AgentToRendererMessage::V1(operation) = &mut message;
         match operation {
             AgentToRenderer::CreateSurface(create) => {
                 if self.get(&create.surface_id).is_some() {
@@ -174,8 +252,10 @@ impl MessageProcessor {
                 if let Some(id) = create.catalog_id.as_deref() {
                     self.current_catalogs().require(Some(id))?;
                 }
-                if let Some(components) = &create.components {
-                    self.current_catalogs().validate_batch(
+                if let Some(components) = &mut create.components {
+                    let catalogs = self.current_catalogs();
+                    catalogs.normalize_components(create.catalog_id.as_deref(), components)?;
+                    catalogs.validate_batch(
                         create.catalog_id.as_deref(),
                         &[],
                         components,
@@ -187,7 +267,9 @@ impl MessageProcessor {
                 let surface = self
                     .get(&update.surface_id)
                     .ok_or_else(|| SurfaceError::UnknownSurface(update.surface_id.clone()))?;
-                self.surface_catalogs(surface).validate_batch(
+                let catalogs = self.surface_catalogs(surface);
+                catalogs.normalize_components(surface.catalog_id(), &mut update.components)?;
+                catalogs.validate_batch(
                     surface.catalog_id(),
                     surface.components(),
                     &update.components,
@@ -207,6 +289,61 @@ impl CatalogView<'_> {
         let id = id.ok_or(ValidationError::MissingCatalog)?;
         self.get(id)
             .ok_or_else(|| ValidationError::UnknownCatalog(id.to_owned()))
+    }
+
+    fn normalize_components(
+        &self,
+        default: Option<&str>,
+        components: &mut Components,
+    ) -> Result<(), ValidationError> {
+        for (index, component) in components.as_mut_slice().iter_mut().enumerate() {
+            let catalog = component
+                .catalog_id
+                .as_deref()
+                .or(default)
+                .and_then(|id| self.get(id));
+            if component.properties.contains_key("catalogId")
+                && !catalog.is_some_and(|catalog| {
+                    catalog.has_custom_component_property(&component.component, "catalogId")
+                })
+                && let Some(id) = legacy_field(
+                    component,
+                    index,
+                    "catalogId",
+                    component.catalog_id.is_some(),
+                )?
+            {
+                component.catalog_id = Some(id);
+            }
+            let catalog = component
+                .catalog_id
+                .as_deref()
+                .or(default)
+                .and_then(|id| self.get(id));
+            if component.properties.contains_key("metadata")
+                && !catalog.is_some_and(|catalog| {
+                    catalog.has_custom_component_property(&component.component, "metadata")
+                })
+                && let Some(metadata) =
+                    legacy_field(component, index, "metadata", component.metadata.is_some())?
+            {
+                component.metadata = Some(metadata);
+            }
+            if component.properties.contains_key("accessibility")
+                && !catalog.is_some_and(|catalog| {
+                    catalog.has_custom_component_property(&component.component, "accessibility")
+                })
+                && let Some(accessibility) = legacy_field(
+                    component,
+                    index,
+                    "accessibility",
+                    component.accessibility.is_some(),
+                )?
+            {
+                component.accessibility = Some(accessibility);
+            }
+        }
+        Ok(())
     }
 
     fn validate_batch(
@@ -234,6 +371,9 @@ impl CatalogView<'_> {
                     path: format!("{base}/id"),
                 });
             }
+            if component.properties.values().any(payload_exceeds_depth) {
+                return Err(ValidationError::PayloadDepth);
+            }
             let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
             let result = catalog.validate_component_at(component, Some(&base));
             match result {
@@ -245,13 +385,28 @@ impl CatalogView<'_> {
                 }
                 result => check_entry(result, config)?,
             }
-            for property in component.properties.values() {
-                self.validate_calls(property, default_catalog, None, config, 0)?;
+            let base = Location::new().join("components").join(index);
+            for (name, property) in &component.properties {
+                self.validate_calls(
+                    property,
+                    default_catalog,
+                    None,
+                    config,
+                    0,
+                    &base.join(name.as_str()),
+                )?;
             }
             if let Some(accessibility) = &component.accessibility {
                 let value = serde_json::to_value(accessibility)
                     .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
-                self.validate_calls(&value, default_catalog, None, config, 0)?;
+                self.validate_calls(
+                    &value,
+                    default_catalog,
+                    None,
+                    config,
+                    0,
+                    &base.join("@accessibility"),
+                )?;
             }
         }
 
@@ -289,17 +444,34 @@ impl CatalogView<'_> {
         template_catalog: Option<&str>,
         config: ValidationConfig,
         depth: usize,
+        path: &Location,
     ) -> Result<(), ValidationError> {
-        let mut nodes = vec![(value, depth)];
-        while let Some((value, depth)) = nodes.pop() {
+        let mut nodes = vec![(value, path.clone())];
+        while let Some((value, path)) = nodes.pop() {
             match value {
                 Value::Object(object) if object.contains_key("@call") => {
                     let call: FunctionCall = serde_json::from_value(value.clone())
                         .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
-                    self.validate_call(&call, default_catalog, template_catalog, config, depth)?;
+                    self.validate_call(
+                        &call,
+                        default_catalog,
+                        template_catalog,
+                        config,
+                        depth,
+                        &path,
+                    )?;
                 }
-                Value::Object(object) => nodes.extend(object.values().map(|value| (value, depth))),
-                Value::Array(items) => nodes.extend(items.iter().map(|value| (value, depth))),
+                Value::Object(object) => nodes.extend(
+                    object
+                        .iter()
+                        .map(|(key, value)| (value, path.join(key.as_str()))),
+                ),
+                Value::Array(items) => nodes.extend(
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| (value, path.join(index))),
+                ),
                 _ => {}
             }
         }
@@ -313,6 +485,7 @@ impl CatalogView<'_> {
         template_catalog: Option<&str>,
         config: ValidationConfig,
         depth: usize,
+        path: &Location,
     ) -> Result<(), ValidationError> {
         if depth >= MAX_FUNCTION_DEPTH {
             return Err(ValidationError::FunctionDepth);
@@ -329,7 +502,15 @@ impl CatalogView<'_> {
             if catalog.is_agent_only(&call.name) {
                 return Err(ValidationError::AgentOnlyFunction(call.name.clone()));
             }
-            check_entry(catalog.validate_function(call), config)?;
+            match catalog.validate_function_at(call, Some(path.as_str())) {
+                Err(CatalogError::UnknownEntry(name)) if !config.allow_unknown_elements => {
+                    return Err(ValidationError::UnknownFunction {
+                        name,
+                        path: path.to_string(),
+                    });
+                }
+                result => check_entry(result, config)?,
+            }
             if call.name == "formatString"
                 && let Some(template) = call
                     .args
@@ -345,16 +526,65 @@ impl CatalogView<'_> {
                             Some(catalog.id()),
                             config,
                             depth + 1,
+                            &path.join("args").join("value"),
                         )?;
                     }
                 }
             }
         }
-        for value in call.args.iter().flat_map(serde_json::Map::values) {
-            self.validate_calls(value, default_catalog, template_catalog, config, depth + 1)?;
+        for (name, value) in call.args.iter().flatten() {
+            self.validate_calls(
+                value,
+                default_catalog,
+                template_catalog,
+                config,
+                depth + 1,
+                &path.join("args").join(name.as_str()),
+            )?;
         }
         Ok(())
     }
+}
+
+fn payload_exceeds_depth(value: &Value) -> bool {
+    let mut pending = vec![(value, 0)];
+    while let Some((value, depth)) = pending.pop() {
+        if depth > MAX_PAYLOAD_DEPTH {
+            return true;
+        }
+        match value {
+            Value::Object(object) => {
+                pending.extend(object.values().map(|value| (value, depth + 1)));
+            }
+            Value::Array(array) => pending.extend(array.iter().map(|value| (value, depth + 1))),
+            _ => {}
+        }
+    }
+    false
+}
+
+fn legacy_field<T: serde::de::DeserializeOwned>(
+    component: &mut Component,
+    index: usize,
+    name: &str,
+    has_canonical: bool,
+) -> Result<Option<T>, CatalogError> {
+    let Some(value) = component.properties.remove(name) else {
+        return Ok(None);
+    };
+    let invalid = |message: String| CatalogError::InvalidPayload {
+        name: component.component.clone(),
+        message,
+        path: Some(format!("/components/{index}/{name}")),
+    };
+    if has_canonical {
+        return Err(invalid(format!(
+            "Component specifies both '{name}' and '@{name}'"
+        )));
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| invalid(format!("Invalid {name}: {error}")))
 }
 
 fn check_entry(
@@ -524,6 +754,32 @@ fn walk<'a>(
     Ok(height)
 }
 
+/// An error from an incoming JSON message or batch.
+#[derive(Debug, Error)]
+pub enum ProcessError {
+    /// The batch wrapper must contain only a `messages` array.
+    #[error("Invalid messages batch")]
+    InvalidBatch,
+    /// The message does not have a valid v1.0 envelope.
+    #[error("Invalid message at index {index}: {source}")]
+    Envelope {
+        /// The zero-based message index.
+        index: usize,
+        /// The envelope decode error.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The processor rejected a decoded message.
+    #[error("Rejected message at index {index}: {source}")]
+    Validation {
+        /// The zero-based message index.
+        index: usize,
+        /// The state validation error.
+        #[source]
+        source: ValidationError,
+    },
+}
+
 /// The reason a message failed validation.
 #[derive(Debug, Error)]
 pub enum ValidationError {
@@ -609,6 +865,17 @@ pub enum ValidationError {
     /// The graph exceeds the component depth limit.
     #[error("Global recursion limit exceeded in component graph")]
     ComponentDepth,
+    /// A component property exceeds the nesting limit.
+    #[error("Global recursion limit exceeded in component properties")]
+    PayloadDepth,
+    /// The catalog does not declare the function.
+    #[error("Unrecognized function '{name}'")]
+    UnknownFunction {
+        /// The function name.
+        name: String,
+        /// The path of the call in the message.
+        path: String,
+    },
     /// A nested function call exceeds the function depth limit.
     #[error("Maximum functionCall depth exceeded")]
     FunctionDepth,
@@ -633,6 +900,7 @@ impl ValidationError {
         let field = match self {
             Self::InvalidComponentId { path, .. }
             | Self::UnknownComponent { path, .. }
+            | Self::UnknownFunction { path, .. }
             | Self::Catalog(CatalogError::InvalidPayload {
                 path: Some(path), ..
             }) => Some((
@@ -676,7 +944,9 @@ impl ValidationError {
                 )
                 | Self::DanglingReference { .. }
                 | Self::Orphan(_) => "INTEGRITY_ERROR",
-                Self::SelfReference(_) | Self::CircularReference(_) => "RECURSION_LIMIT_EXCEEDED",
+                Self::SelfReference(_) | Self::CircularReference(_) | Self::PayloadDepth => {
+                    "RECURSION_LIMIT_EXCEEDED"
+                }
                 Self::MissingCatalog | Self::UnknownCatalog(_) => "CATALOG_NOT_FOUND",
                 Self::Surface(SurfaceError::Data { .. }) => "DATA_ERROR",
                 _ => return None,

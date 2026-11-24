@@ -144,7 +144,10 @@ fn audit(root: &Path) -> Result<(), TestError> {
                     format!("missing or duplicate case name in {}", suite.display()).into(),
                 );
             }
-            let (status, reason) = if is_legacy_suite(suite) || is_legacy_case(&suite_name, &case) {
+            let (status, reason) = if is_legacy_suite(suite)
+                || is_legacy_case(&suite_name, &case)
+                || nodes::uses_legacy_fixture(&upstream, &suite_name, &case)?
+            {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
@@ -273,24 +276,7 @@ fn supports_case(suite: &str, case: &Case) -> bool {
         return true;
     }
     if suite == SURFACE_SUITE {
-        return case.action == "process_messages"
-            && case.protocol_version.as_deref() == Some("1.0")
-            && matches!(
-                case.name.as_str(),
-                "test_v10_create_surface_inline_initialization"
-                    | "test_v10_create_surface_optional_catalog_id"
-                    | "test_v10_create_surface_with_metadata_extensions"
-                    | "test_v10_create_surface_metadata_extension_key_must_be_identifier"
-                    | "test_v10_create_surface_metadata_only_holds_extensions"
-                    | "test_v10_update_data_model_deletion"
-                    | "test_update_data_model_on_deleted_surface_error"
-                    | "test_delete_non_existent_surface_is_safe_noop"
-                    | "test_v10_create_surface_theme_rejected_strict"
-                    | "test_batch_multi_stage_lifecycle_pipeline"
-                    | "test_update_components_on_deleted_surface_error"
-                    | "test_v10_update_components_stores_at_prefixed_component_metadata"
-                    | "test_v10_update_components_rejects_null_at_catalog_id"
-            );
+        return supports_direct_surface_case(case);
     }
 
     if is_data_model_suite(suite) {
@@ -307,6 +293,27 @@ fn supports_case(suite: &str, case: &Case) -> bool {
         && matches!(
             case.definition.as_deref(),
             Some("FunctionResponse" | "Extensions")
+        )
+}
+
+fn supports_direct_surface_case(case: &Case) -> bool {
+    case.action == "process_messages"
+        && case.protocol_version.as_deref() == Some("1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_v10_create_surface_inline_initialization"
+                | "test_v10_create_surface_optional_catalog_id"
+                | "test_v10_create_surface_with_metadata_extensions"
+                | "test_v10_create_surface_metadata_extension_key_must_be_identifier"
+                | "test_v10_create_surface_metadata_only_holds_extensions"
+                | "test_v10_update_data_model_deletion"
+                | "test_update_data_model_on_deleted_surface_error"
+                | "test_delete_non_existent_surface_is_safe_noop"
+                | "test_v10_create_surface_theme_rejected_strict"
+                | "test_batch_multi_stage_lifecycle_pipeline"
+                | "test_update_components_on_deleted_surface_error"
+                | "test_v10_update_components_stores_at_prefixed_component_metadata"
+                | "test_v10_update_components_rejects_null_at_catalog_id"
         )
 }
 
