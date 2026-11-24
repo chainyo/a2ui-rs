@@ -51,6 +51,21 @@ mise exec -- cargo test --package a2ui-rs --test protocol --locked
 The protocol tests use separate fixtures. The Core report contains only the Core YAML cases.
 See [Protocol types](protocol.md) for the validation boundaries.
 
+## Processor timing
+
+Run the timing tests in an optimized build.
+
+```sh
+mise run timing
+```
+
+The test expands the pinned payload templates before timing.
+It loads the catalogs before each run.
+It measures message processing after a warmup and compares the median times for the two input sizes.
+For the upstream `none` setting, the test permits unresolved references during streaming.
+The Rust processor uses its other default validation rules for this setting.
+Package validation runs the timing tests in a separate Linux job.
+
 ## Upstream reference
 
 `fixtures/upstream/` is a Git submodule of [a2ui-project/a2ui](https://github.com/a2ui-project/a2ui).

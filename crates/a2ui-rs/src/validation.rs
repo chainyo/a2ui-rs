@@ -58,6 +58,7 @@ impl ValidationConfig {
 pub struct MessageProcessor {
     store: SurfaceStore,
     catalogs: CatalogRegistry,
+    topologies: BTreeMap<String, Topology>,
     config: ValidationConfig,
 }
 
@@ -244,6 +245,8 @@ impl MessageProcessor {
         config: ValidationConfig,
     ) -> Result<(), ValidationError> {
         let AgentToRendererMessage::V1(operation) = &mut message;
+        let mut topology = None;
+        let mut deleted = None;
         match operation {
             AgentToRenderer::CreateSurface(create) => {
                 if self.get(&create.surface_id).is_some() {
@@ -255,12 +258,14 @@ impl MessageProcessor {
                 if let Some(components) = &mut create.components {
                     let catalogs = self.current_catalogs();
                     catalogs.normalize_components(create.catalog_id.as_deref(), components)?;
-                    catalogs.validate_batch(
+                    if let Some(index) = catalogs.validate_batch(
                         create.catalog_id.as_deref(),
-                        &[],
+                        None,
                         components,
                         config,
-                    )?;
+                    )? {
+                        topology = Some((create.surface_id.clone(), index));
+                    }
                 }
             }
             AgentToRenderer::UpdateComponents(update) => {
@@ -269,12 +274,15 @@ impl MessageProcessor {
                     .ok_or_else(|| SurfaceError::UnknownSurface(update.surface_id.clone()))?;
                 let catalogs = self.surface_catalogs(surface);
                 catalogs.normalize_components(surface.catalog_id(), &mut update.components)?;
-                catalogs.validate_batch(
+                let current = self.topologies.get(&update.surface_id);
+                if let Some(index) = catalogs.validate_batch(
                     surface.catalog_id(),
-                    surface.components(),
+                    Some((surface, current)),
                     &update.components,
                     config,
-                )?;
+                )? {
+                    topology = Some((update.surface_id.clone(), index));
+                }
             }
             AgentToRenderer::UpdateDataModel(update) => {
                 validate_nesting(&update.value, false)?;
@@ -289,10 +297,17 @@ impl MessageProcessor {
                     .into());
                 }
             }
+            AgentToRenderer::DeleteSurface(delete) => deleted = Some(delete.surface_id.clone()),
             _ => {}
         }
         self.store
             .apply_with_catalog_count(message, self.catalogs.len())?;
+        if let Some((id, index)) = topology {
+            self.topologies.insert(id, index);
+        }
+        if let Some(id) = deleted {
+            self.topologies.remove(&id);
+        }
         Ok(())
     }
 }
@@ -362,20 +377,70 @@ impl CatalogView<'_> {
     fn validate_batch(
         &self,
         default_catalog: Option<&str>,
-        current: &[Component],
+        current: Option<(&Surface, Option<&Topology>)>,
         batch: &Components,
         config: ValidationConfig,
-    ) -> Result<(), ValidationError> {
-        let mut pending = BTreeMap::new();
-        for (index, component) in batch.as_slice().iter().enumerate() {
-            if pending
-                .insert(component.id.as_str(), (index, component))
-                .is_some()
-            {
+    ) -> Result<Option<Topology>, ValidationError> {
+        let mut ids = BTreeSet::new();
+        for component in batch.as_slice() {
+            if !ids.insert(component.id.as_str()) {
                 return Err(SurfaceError::DuplicateComponent(component.id.clone()).into());
             }
         }
 
+        self.validate_payloads(default_catalog, batch, config)?;
+        let mut graph = BTreeMap::new();
+        for (index, component) in batch.as_slice().iter().enumerate() {
+            graph.insert(
+                component.id.as_str(),
+                self.graph_node(default_catalog, component, Some(index))?,
+            );
+        }
+        if let Some((surface, index)) = current {
+            if index.is_some_and(|index| index.accepts_leaves(self, surface, &graph, config)) {
+                return Ok(None);
+            }
+            for component in surface.components() {
+                if !ids.contains(component.id.as_str()) {
+                    graph.insert(
+                        component.id.as_str(),
+                        self.graph_node(default_catalog, component, None)?,
+                    );
+                }
+            }
+        }
+        let can_attach_leaf = validate_graph(&graph, config)?;
+        Ok(Some(Topology::new(&graph, config, can_attach_leaf)))
+    }
+
+    fn graph_node<'a>(
+        &'a self,
+        default_catalog: Option<&str>,
+        component: &'a Component,
+        index: Option<usize>,
+    ) -> Result<Node<'a>, ValidationError> {
+        let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
+        let schema = catalog.component_schema(&component.component);
+        let payload = Value::Object(component.properties.clone().into_iter().collect());
+        let children = catalog
+            .child_references(schema, &payload)
+            .into_iter()
+            .map(|(id, field)| (id.to_owned(), field))
+            .collect();
+        Ok(Node {
+            kind: &component.component,
+            schema,
+            children,
+            index,
+        })
+    }
+
+    fn validate_payloads(
+        &self,
+        default_catalog: Option<&str>,
+        batch: &Components,
+        config: ValidationConfig,
+    ) -> Result<(), ValidationError> {
         for (index, component) in batch.as_slice().iter().enumerate() {
             let base = component_path(index);
             if !is_identifier(&component.id) {
@@ -428,32 +493,7 @@ impl CatalogView<'_> {
                 )?;
             }
         }
-
-        let mut graph = BTreeMap::new();
-        for component in current
-            .iter()
-            .filter(|item| !pending.contains_key(item.id.as_str()))
-            .chain(pending.values().map(|&(_, component)| component))
-        {
-            let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
-            let schema = catalog.component_schema(&component.component);
-            let payload = Value::Object(component.properties.clone().into_iter().collect());
-            let children = catalog
-                .child_references(schema, &payload)
-                .into_iter()
-                .map(|(id, field)| (id.to_owned(), field))
-                .collect();
-            graph.insert(
-                component.id.as_str(),
-                Node {
-                    kind: &component.component,
-                    schema,
-                    children,
-                    index: pending.get(component.id.as_str()).map(|(index, _)| *index),
-                },
-            );
-        }
-        validate_graph(&graph, config)
+        Ok(())
     }
 
     fn validate_calls(
@@ -640,6 +680,82 @@ fn check_entry(
     }
 }
 
+struct Topology {
+    parents: BTreeMap<String, Vec<String>>,
+    containers: BTreeSet<String>,
+    config: ValidationConfig,
+    can_attach_leaf: bool,
+}
+
+impl Topology {
+    fn new(
+        graph: &BTreeMap<&str, Node<'_>>,
+        config: ValidationConfig,
+        can_attach_leaf: bool,
+    ) -> Self {
+        let mut parents = BTreeMap::<String, Vec<String>>::new();
+        let mut containers = BTreeSet::new();
+        for (&id, node) in graph {
+            if !node.children.is_empty() {
+                containers.insert(id.to_owned());
+            }
+            for child in node.children.keys() {
+                parents
+                    .entry(child.clone())
+                    .or_default()
+                    .push(id.to_owned());
+            }
+        }
+        Self {
+            parents,
+            containers,
+            config,
+            can_attach_leaf,
+        }
+    }
+
+    fn accepts_leaves(
+        &self,
+        catalogs: &CatalogView<'_>,
+        surface: &Surface,
+        batch: &BTreeMap<&str, Node<'_>>,
+        config: ValidationConfig,
+    ) -> bool {
+        if config != self.config {
+            return false;
+        }
+        let require_parent = !config.allow_orphan_components && surface.component("root").is_some();
+        // A leaf cannot make a cycle or change an existing path.
+        // A new leaf can extend a path by one edge.
+        // Later leaf updates cannot extend the same path again.
+        batch.iter().all(|(&id, node)| {
+            if id == "root" || !node.children.is_empty() || self.containers.contains(id) {
+                return false;
+            }
+            let parents = self.parents.get(id);
+            if surface.component(id).is_none()
+                && (!self.can_attach_leaf || (require_parent && parents.is_none()))
+            {
+                return false;
+            }
+            parents.into_iter().flatten().all(|parent| {
+                surface.component(parent).is_some_and(|component| {
+                    component
+                        .catalog_id
+                        .as_deref()
+                        .or(surface.catalog_id())
+                        .and_then(|id| catalogs.get(id))
+                        .is_some_and(|catalog| {
+                            let schema = catalog.component_schema(&component.component);
+                            allows(&node.schema["allowedParents"], &component.component)
+                                && allows(&schema["allowedChildren"], node.kind)
+                        })
+                })
+            })
+        })
+    }
+}
+
 struct Node<'a> {
     kind: &'a str,
     schema: &'a Value,
@@ -661,7 +777,7 @@ impl Node<'_> {
 fn validate_graph(
     graph: &BTreeMap<&str, Node<'_>>,
     config: ValidationConfig,
-) -> Result<(), ValidationError> {
+) -> Result<bool, ValidationError> {
     if let Some(root) = graph.get("root") {
         validate_parent("root", root, "Surface", "Surface", || root.path(""))?;
     } else if !config.allow_missing_root {
@@ -717,7 +833,9 @@ fn validate_graph(
     if let Some(id) = orphan {
         Err(ValidationError::Orphan(id.to_owned()))
     } else {
-        Ok(())
+        Ok(heights
+            .values()
+            .all(|&height| height <= MAX_COMPONENT_DEPTH))
     }
 }
 
