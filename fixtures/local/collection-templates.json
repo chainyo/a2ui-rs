@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "shipments",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {
+      "lineLabel": "Item",
+      "shipments": [
+        {"name": "London", "lines": [{"name": "Labels"}, {"name": "Boxes"}]},
+        {"name": "Bristol", "lines": [{"name": "Tape"}]}
+      ]
+    },
+    "components": [
+      {"id": "root", "component": "Column", "children": {"componentId": "shipment", "path": "/shipments"}},
+      {"id": "shipment", "component": "Column", "children": ["title", "lines"]},
+      {"id": "title", "component": "Text", "text": {"@path": "name"}},
+      {"id": "lines", "component": "Column", "children": {"componentId": "line", "path": "lines"}},
+      {"id": "line", "component": "TextField", "label": {"@path": "/lineLabel"}, "value": {"@path": "name"}}
+    ]
+  }
+}

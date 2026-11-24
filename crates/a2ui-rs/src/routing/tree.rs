@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::Value;
+use thiserror::Error;
 
-use super::{Evaluation, EvaluationId, EvaluationState, RoutingSession, Task};
+use super::{
+    Evaluation, EvaluationId, EvaluationState, RoutingError, RoutingSession, RoutingUpdate, Task,
+};
 use crate::catalog::{Catalog, PropertyKind};
+use crate::data_model::DataModel;
 use crate::resolution::DataScope;
+use crate::rpc::ReceiveError;
 use crate::surface::Surface;
 
 /// Identifies one mounted node in a routing session.
@@ -16,14 +21,14 @@ pub struct NodeId(u64);
 pub struct MountedProperty {
     /// The resolved value. A pending or failed expression can have a null value.
     pub value: Value,
-    /// The data path for a writable binding.
+    /// The absolute data path for a writable binding.
     pub binding_path: Option<String>,
 }
 
-/// An explicit child and the field that refers to it.
+/// A child instance and the field that refers to it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MountedChild {
-    /// The field path in the component definition.
+    /// The field path. For a template, the path ends with the item index.
     pub field: String,
     /// The mounted child ID.
     pub id: NodeId,
@@ -38,9 +43,11 @@ pub struct MountedNode {
     pub component_id: String,
     /// The component type from the catalog.
     pub component: String,
-    /// The resolved properties, including explicit child references.
+    /// The data scope for this instance.
+    pub scope: DataScope,
+    /// The resolved properties, including child declarations.
     pub properties: BTreeMap<String, MountedProperty>,
-    /// The mounted explicit children in order.
+    /// The mounted children in order.
     pub children: Vec<MountedChild>,
 }
 
@@ -66,11 +73,30 @@ pub struct NodeChange {
     pub kind: NodeChangeKind,
 }
 
-/// The mounted root and explicit descendants for one surface.
+/// The reason a write to a node property failed.
+#[derive(Debug, Error)]
+pub enum NodeWriteError {
+    /// The surface does not have a mounted node with this ID.
+    #[error("Node {0:?} is not mounted on this surface")]
+    UnknownNode(NodeId),
+    /// The node property has no writable binding.
+    #[error("Node property '{0}' has no writable binding")]
+    ReadOnly(String),
+    /// The processor rejected the data write.
+    #[error(transparent)]
+    Receive(#[from] ReceiveError),
+}
+
+/// The mounted root and descendants for one surface.
 #[derive(Default)]
 pub struct NodeTree {
     root: Option<NodeId>,
     entries: BTreeMap<NodeId, Entry>,
+    definitions: BTreeMap<String, Definition>,
+    has_collections: bool,
+    generation: u64,
+    template_errors: BTreeMap<(NodeId, String), RoutingError>,
+    reported_errors: BTreeMap<(NodeId, String), RoutingError>,
 }
 
 impl NodeTree {
@@ -105,12 +131,8 @@ impl MountedTrees {
     pub(super) fn clear_surface(&mut self, surface: &str) {
         self.dirty.remove(surface);
         if let Some(tree) = self.active.get_mut(surface) {
-            tree.root = None;
-            record_disposals(
-                &mut self.changes,
-                surface,
-                std::mem::take(&mut tree.entries),
-            );
+            let previous = std::mem::take(tree);
+            record_disposals(&mut self.changes, surface, previous.entries);
         }
     }
 
@@ -124,12 +146,22 @@ impl MountedTrees {
     pub(super) fn publish(
         &mut self,
         evaluations: &BTreeMap<EvaluationId, Evaluation>,
-    ) -> Vec<NodeChange> {
+        update: &mut RoutingUpdate,
+    ) {
         for (surface, tree) in &mut self.active {
+            if tree.reported_errors != tree.template_errors {
+                update.errors.extend(
+                    tree.template_errors
+                        .iter()
+                        .filter(|(key, error)| tree.reported_errors.get(*key) != Some(error))
+                        .map(|(_, error)| error.clone().wire(surface)),
+                );
+                tree.reported_errors.clone_from(&tree.template_errors);
+            }
             for (&id, entry) in &mut tree.entries {
                 let kind = if !entry.published {
                     NodeChangeKind::Mounted
-                } else if entry.children_changed || entry.properties_changed(evaluations) {
+                } else if entry.next_children.is_some() || entry.properties_changed(evaluations) {
                     NodeChangeKind::Updated
                 } else {
                     continue;
@@ -153,15 +185,17 @@ impl MountedTrees {
                     })
                     .collect();
                 entry.published = true;
-                entry.children_changed = false;
+                if let Some(children) = entry.next_children.take() {
+                    entry.node.children = children;
+                }
             }
         }
-        std::mem::take(&mut self.changes)
+        update.nodes = std::mem::take(&mut self.changes);
     }
 }
 
 impl RoutingSession<'_> {
-    /// Tracks the root and explicit descendants of a surface.
+    /// Tracks the root and descendants of a surface.
     ///
     /// Call `advance` to mount the tree. A surface can arrive after this call.
     pub fn mount_tree(&mut self, surface: &str) {
@@ -177,6 +211,35 @@ impl RoutingSession<'_> {
     #[must_use]
     pub fn node_tree(&self, surface: &str) -> Option<&NodeTree> {
         self.trees.active.get(surface)
+    }
+
+    /// Writes a value through a mounted node's data binding.
+    ///
+    /// Call `advance` to publish the result.
+    ///
+    /// # Errors
+    /// Returns an error if the node is absent, the property has no write path, or the write fails.
+    pub fn write_node_property(
+        &mut self,
+        surface: &str,
+        id: NodeId,
+        property: &str,
+        value: Value,
+    ) -> Result<(), NodeWriteError> {
+        self.reconcile_tree(surface);
+        let entry = self
+            .trees
+            .active
+            .get(surface)
+            .and_then(|tree| tree.entries.get(&id))
+            .ok_or(NodeWriteError::UnknownNode(id))?;
+        let path = entry
+            .evaluations
+            .get(property)
+            .and_then(|binding| binding.binding_path.clone())
+            .ok_or_else(|| NodeWriteError::ReadOnly(property.to_owned()))?;
+        self.write_binding(surface, &DataScope::default(), &path, value)?;
+        Ok(())
     }
 
     /// Stops tracking a surface and removes its mounted nodes.
@@ -199,32 +262,68 @@ impl RoutingSession<'_> {
     }
 
     pub(super) fn reconcile_trees(&mut self) {
-        for surface in std::mem::take(&mut self.trees.dirty) {
-            let Some(tree) = self.trees.active.remove(&surface) else {
-                continue;
-            };
-            let processor = self.processor();
-            let definitions = processor
-                .get(&surface)
-                .map_or_else(BTreeMap::new, |surface| {
-                    definitions(surface, &processor.catalogs)
-                });
-            let mut reconcile = Reconcile {
-                session: self,
-                surface: &surface,
-                definitions: &definitions,
-                previous: tree.entries,
-                entries: BTreeMap::new(),
-            };
-            let root = reconcile.node("root", tree.root);
-            let Reconcile {
-                entries, previous, ..
-            } = reconcile;
-            self.retire_entries(&surface, previous);
+        let mut pending = self.trees.dirty.clone();
+        pending.extend(
             self.trees
                 .active
-                .insert(surface, NodeTree { root, entries });
+                .iter()
+                .filter(|(surface, tree)| {
+                    tree.has_collections && tree.generation != self.state.generation(surface)
+                })
+                .map(|(surface, _)| surface.clone()),
+        );
+        for surface in pending {
+            self.reconcile_tree(&surface);
         }
+    }
+
+    fn reconcile_tree(&mut self, surface: &str) {
+        let layout_changed = self.trees.dirty.remove(surface);
+        let generation = self.state.generation(surface);
+        let Some(tree) = self.trees.active.get_mut(surface) else {
+            return;
+        };
+        if !layout_changed && (!tree.has_collections || tree.generation == generation) {
+            return;
+        }
+        tree.generation = generation;
+        let processor = self.rpc.processor();
+        let Some(model) = processor.get(surface) else {
+            return;
+        };
+        if layout_changed {
+            tree.definitions = definitions(model, &processor.catalogs);
+            tree.has_collections = tree.definitions.values().any(|definition| {
+                definition
+                    .children
+                    .iter()
+                    .any(|child| child.collection.is_some())
+            });
+        }
+        let mut reconcile = Reconcile {
+            evaluations: &mut self.evaluations,
+            next_evaluation: &mut self.next_id,
+            next_node: &mut self.trees.next_id,
+            surface,
+            data: model.data_model(),
+            definitions: &tree.definitions,
+            previous: std::mem::take(&mut tree.entries),
+            entries: BTreeMap::new(),
+            errors: BTreeMap::new(),
+        };
+        tree.root = reconcile.node("root", &DataScope::default(), None, tree.root);
+        let Reconcile {
+            entries,
+            previous,
+            errors,
+            ..
+        } = reconcile;
+        tree.entries = entries;
+        tree.template_errors = errors;
+        if !tree.has_collections {
+            tree.definitions.clear();
+        }
+        self.retire_entries(surface, previous);
     }
 }
 
@@ -245,9 +344,10 @@ fn record_disposals(
 struct Entry {
     node: MountedNode,
     catalog_id: Option<String>,
+    template_field: Option<String>,
     evaluations: BTreeMap<String, PropertyEvaluation>,
     published: bool,
-    children_changed: bool,
+    next_children: Option<Vec<MountedChild>>,
 }
 
 impl Entry {
@@ -280,7 +380,13 @@ struct Definition {
     component: String,
     catalog_id: Option<String>,
     properties: BTreeMap<String, Option<String>>,
-    children: Vec<(String, String)>,
+    children: Vec<ChildDefinition>,
+}
+
+struct ChildDefinition {
+    field: String,
+    id: String,
+    collection: Option<String>,
 }
 
 fn definitions(
@@ -321,8 +427,22 @@ fn definitions(
             let children = shape
                 .children
                 .into_iter()
-                .filter(|child| child.collection.is_none())
-                .map(|child| (child.field, child.id.to_owned()))
+                .map(|child| {
+                    let field = if child.collection.is_some() {
+                        child
+                            .field
+                            .strip_suffix(".componentId")
+                            .unwrap_or(&child.field)
+                            .to_owned()
+                    } else {
+                        child.field
+                    };
+                    ChildDefinition {
+                        field,
+                        id: child.id.to_owned(),
+                        collection: child.collection.map(str::to_owned),
+                    }
+                })
                 .collect();
             (
                 component.id.clone(),
@@ -337,72 +457,128 @@ fn definitions(
         .collect()
 }
 
-struct Reconcile<'a, 'f> {
-    session: &'a mut RoutingSession<'f>,
+struct Reconcile<'a> {
+    evaluations: &'a mut BTreeMap<EvaluationId, Evaluation>,
+    next_evaluation: &'a mut u64,
+    next_node: &'a mut u64,
     surface: &'a str,
+    data: &'a DataModel,
     definitions: &'a BTreeMap<String, Definition>,
     previous: BTreeMap<NodeId, Entry>,
     entries: BTreeMap<NodeId, Entry>,
+    errors: BTreeMap<(NodeId, String), RoutingError>,
 }
 
-impl Reconcile<'_, '_> {
-    fn node(&mut self, component_id: &str, old_id: Option<NodeId>) -> Option<NodeId> {
+impl Reconcile<'_> {
+    fn node(
+        &mut self,
+        component_id: &str,
+        scope: &DataScope,
+        template_field: Option<&str>,
+        old_id: Option<NodeId>,
+    ) -> Option<NodeId> {
         let definition = self.definitions.get(component_id)?;
         let mut entry = old_id
             .filter(|id| {
                 self.previous.get(id).is_some_and(|entry| {
                     entry.node.component_id == component_id
                         && entry.node.component == definition.component
+                        && entry.node.scope == *scope
                         && entry.catalog_id == definition.catalog_id
                 })
             })
             .and_then(|id| self.previous.remove(&id))
-            .unwrap_or_else(|| self.new_entry(component_id, definition));
+            .unwrap_or_else(|| self.new_entry(component_id, definition, scope, template_field));
         self.mount_properties(&mut entry, definition);
 
-        let mut previous_children = BTreeMap::<_, VecDeque<_>>::new();
-        for child in &entry.node.children {
-            if let Some(previous) = self.previous.get(&child.id) {
-                previous_children
-                    .entry(previous.node.component_id.clone())
-                    .or_default()
-                    .push_back(child.id);
-            }
-        }
-        let children = definition
-            .children
-            .iter()
-            .filter_map(|(field, child)| {
-                let old = previous_children
-                    .get_mut(child)
-                    .and_then(VecDeque::pop_front);
-                self.node(child, old).map(|id| MountedChild {
-                    field: field.clone(),
-                    id,
-                })
-            })
-            .collect();
-        entry.children_changed = entry.node.children != children;
-        entry.node.children = children;
+        let children = self.children(&entry, definition);
+        entry.next_children = (entry.node.children != children).then_some(children);
         let id = entry.node.id;
         self.entries.insert(id, entry);
         Some(id)
     }
 
-    fn new_entry(&mut self, component_id: &str, definition: &Definition) -> Entry {
-        self.session.trees.next_id += 1;
+    fn children(&mut self, parent: &Entry, definition: &Definition) -> Vec<MountedChild> {
+        let mut previous = BTreeMap::<_, VecDeque<_>>::new();
+        for child in parent
+            .next_children
+            .as_ref()
+            .unwrap_or(&parent.node.children)
+        {
+            if let Some(entry) = self.previous.get(&child.id) {
+                previous
+                    .entry((
+                        entry.node.component_id.clone(),
+                        entry.template_field.clone(),
+                    ))
+                    .or_default()
+                    .push_back(child.id);
+            }
+        }
+
+        let mut children = Vec::new();
+        for child in &definition.children {
+            if let Some(path) = &child.collection {
+                match parent.node.scope.collection(self.data, path) {
+                    Ok(scopes) => {
+                        let mut old = previous
+                            .remove(&(child.id.clone(), Some(child.field.clone())))
+                            .unwrap_or_default();
+                        for (index, scope) in scopes.iter().enumerate() {
+                            if let Some(id) =
+                                self.node(&child.id, scope, Some(&child.field), old.pop_front())
+                            {
+                                children.push(MountedChild {
+                                    field: format!("{}[{index}]", child.field),
+                                    id,
+                                });
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.errors.insert(
+                            (parent.node.id, child.field.clone()),
+                            RoutingError::expression(error),
+                        );
+                    }
+                }
+            } else {
+                let old = previous
+                    .get_mut(&(child.id.clone(), None))
+                    .and_then(VecDeque::pop_front);
+                if let Some(id) = self.node(&child.id, &parent.node.scope, None, old) {
+                    children.push(MountedChild {
+                        field: child.field.clone(),
+                        id,
+                    });
+                }
+            }
+        }
+        children
+    }
+
+    fn new_entry(
+        &mut self,
+        component_id: &str,
+        definition: &Definition,
+        scope: &DataScope,
+        template_field: Option<&str>,
+    ) -> Entry {
+        *self.next_node += 1;
         Entry {
             node: MountedNode {
-                id: NodeId(self.session.trees.next_id),
+                id: NodeId(*self.next_node),
                 component_id: component_id.to_owned(),
                 component: definition.component.clone(),
+                scope: scope.clone(),
                 properties: BTreeMap::new(),
                 children: Vec::new(),
             },
             catalog_id: definition.catalog_id.clone(),
+            template_field: template_field.map(str::to_owned),
             evaluations: BTreeMap::new(),
             published: false,
-            children_changed: false,
+            next_children: None,
         }
     }
 
@@ -411,15 +587,17 @@ impl Reconcile<'_, '_> {
             if definition.properties.contains_key(name) {
                 true
             } else {
-                self.session.unmount(property.id);
+                self.evaluations.remove(&property.id);
                 false
             }
         });
         for (name, binding_path) in &definition.properties {
             let property = entry.evaluations.entry(name.clone()).or_insert_with(|| {
-                let id = self.session.mount(
+                let id = Evaluation::mount(
+                    self.evaluations,
+                    self.next_evaluation,
                     self.surface,
-                    DataScope::default(),
+                    entry.node.scope.clone(),
                     Task::Property {
                         component: entry.node.component_id.clone(),
                         property: name.clone(),
@@ -431,7 +609,9 @@ impl Reconcile<'_, '_> {
                     binding_path: None,
                 }
             });
-            property.binding_path.clone_from(binding_path);
+            property.binding_path = binding_path
+                .as_ref()
+                .map(|path| entry.node.scope.resolve_path(path));
         }
     }
 }

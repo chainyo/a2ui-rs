@@ -24,6 +24,7 @@ use evaluation::Tick;
 use tree::MountedTrees;
 pub use tree::{
     MountedChild, MountedNode, MountedProperty, NodeChange, NodeChangeKind, NodeId, NodeTree,
+    NodeWriteError,
 };
 
 const CACHE_LIMIT: usize = 256;
@@ -308,23 +309,13 @@ impl<'f> RoutingSession<'f> {
     }
 
     fn mount(&mut self, surface: &str, scope: DataScope, task: Task) -> EvaluationId {
-        self.next_id += 1;
-        let id = EvaluationId(self.next_id);
-        self.evaluations.insert(
-            id,
-            Evaluation {
-                surface: surface.to_owned(),
-                scope,
-                task,
-                outcome: EvaluationState::Pending,
-                validation_result: None,
-                reported: false,
-                slots: BTreeMap::new(),
-                diagnostics: BTreeMap::new(),
-                event: EventProgress::default(),
-            },
-        );
-        id
+        Evaluation::mount(
+            &mut self.evaluations,
+            &mut self.next_id,
+            surface,
+            scope,
+            task,
+        )
     }
 
     /// Removes an evaluation. Its unshared pending calls are dropped.
@@ -401,20 +392,26 @@ impl<'f> RoutingSession<'f> {
     /// Resolves mounted expressions, sends new requests, and returns state changes.
     ///
     /// Call after input changes, incoming responses, or a pending deadline.
-    pub fn advance(&mut self, now: Instant, outbound: Option<&mut Outbound<'_>>) -> RoutingUpdate {
-        self.reconcile_trees();
+    pub fn advance(
+        &mut self,
+        now: Instant,
+        mut outbound: Option<&mut Outbound<'_>>,
+    ) -> RoutingUpdate {
         self.rpc.expire(now);
-        let mut tick = Tick {
-            rpc: &mut self.rpc,
-            functions: &self.functions,
-            state: &mut self.state,
-            now,
-            timeout: self.timeout,
-            outbound,
-        };
         let mut update = RoutingUpdate::default();
         let mut reported_calls = BTreeSet::new();
         for imperative in [true, false] {
+            if !imperative {
+                self.reconcile_trees();
+            }
+            let mut tick = Tick {
+                rpc: &mut self.rpc,
+                functions: &self.functions,
+                state: &mut self.state,
+                now,
+                timeout: self.timeout,
+                outbound: outbound.as_deref_mut(),
+            };
             for (&id, evaluation) in self
                 .evaluations
                 .iter_mut()
@@ -454,11 +451,11 @@ impl<'f> RoutingSession<'f> {
                 evaluation.outcome = outcome;
             }
         }
-        tick.state
+        self.state
             .surfaces
             .values_mut()
             .for_each(|surface| surface.shared.retain(|_, call| call.strong_count() > 0));
-        update.nodes = self.trees.publish(&self.evaluations);
+        self.trees.publish(&self.evaluations, &mut update);
         update
     }
 }
@@ -518,6 +515,34 @@ struct Evaluation {
     event: EventProgress,
 }
 
+impl Evaluation {
+    fn mount(
+        evaluations: &mut BTreeMap<EvaluationId, Self>,
+        next_id: &mut u64,
+        surface: &str,
+        scope: DataScope,
+        task: Task,
+    ) -> EvaluationId {
+        *next_id += 1;
+        let id = EvaluationId(*next_id);
+        evaluations.insert(
+            id,
+            Self {
+                surface: surface.to_owned(),
+                scope,
+                task,
+                outcome: EvaluationState::Pending,
+                validation_result: None,
+                reported: false,
+                slots: BTreeMap::new(),
+                diagnostics: BTreeMap::new(),
+                event: EventProgress::default(),
+            },
+        );
+        id
+    }
+}
+
 #[derive(Default)]
 struct EventProgress {
     completed: usize,
@@ -551,6 +576,12 @@ struct RouterState {
 }
 
 impl RouterState {
+    fn generation(&self, surface: &str) -> u64 {
+        self.surfaces
+            .get(surface)
+            .map_or(0, |state| state.generation)
+    }
+
     fn bump(&mut self, surface: &str) {
         self.surfaces
             .entry(surface.to_owned())

@@ -281,7 +281,7 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
     } else if validation::supports(suite, case) {
         validation::execute(upstream, case)
     } else if resolution::supports(suite, case) {
-        resolution::execute(upstream, case)
+        resolution::execute(upstream, suite, case)
     } else if rpc::supports(suite, case) {
         rpc::execute(upstream, case)
     } else if routing::supports(suite, case) {

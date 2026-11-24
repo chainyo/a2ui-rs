@@ -154,10 +154,14 @@ Event context entries resolve in order. An error stops the event before dispatch
 Call `RoutingSession::mount_tree` to track a surface.
 Call `advance` after each message to publish node changes in message order.
 Read the current root and nodes with `node_tree`.
-Each node gives the IDs and field paths of its explicit children.
+Each node gives the IDs and field paths of its children.
 
 A node keeps its ID across property changes and explicit sibling reordering.
-Use the property binding path to write data with `write_binding`.
+A collection template mounts one node per array item.
+A template node keeps its ID while its array index stays present.
+A nested template resolves its path in the parent node's scope.
+Use `write_node_property` to write a value through a node's data binding.
+The session resolves a relative binding path in that node's scope.
 An update reports each changed node once.
 Removing a node also removes its descendants and their property evaluations.
 Use `unmount_tree` to stop tracking a surface.

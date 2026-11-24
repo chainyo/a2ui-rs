@@ -390,6 +390,12 @@ impl Catalog {
                     candidates.push((target, data, common, path.clone()));
                 }
             }
+            if let Some(kind) = inline_dynamic_kind(schema, common) {
+                shape
+                    .properties
+                    .entry(std::ptr::from_ref(data))
+                    .or_insert(kind);
+            }
             if let Some(properties) = schema["properties"].as_object() {
                 for (key, property) in properties.iter().rev() {
                     if let Some(value) = data.get(key) {
@@ -435,6 +441,34 @@ impl Catalog {
         };
         document.pointer(&pointer)
     }
+}
+
+fn inline_dynamic_kind(schema: &Value, common: bool) -> Option<PropertyKind> {
+    let branches = schema["oneOf"]
+        .as_array()
+        .or_else(|| schema["anyOf"].as_array())?;
+    let mut kind = None;
+    let mut dynamic = false;
+    for branch in branches {
+        if let Some(reference) = branch["$ref"].as_str() {
+            let (pointer, common) =
+                common_ref(reference).map_or((reference, common), |pointer| (pointer, true));
+            if common && matches!(pointer, "#/$defs/DataBinding" | "#/$defs/FunctionCall") {
+                dynamic = true;
+                continue;
+            }
+        }
+        if kind.is_some() {
+            return None;
+        }
+        kind = Some(match branch["type"].as_str()? {
+            "boolean" => PropertyKind::Boolean,
+            "number" => PropertyKind::Number,
+            "string" => PropertyKind::String,
+            _ => return None,
+        });
+    }
+    if dynamic { kind } else { None }
 }
 
 /// A catalog or catalog payload error.

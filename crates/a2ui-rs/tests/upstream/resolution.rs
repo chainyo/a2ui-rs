@@ -48,7 +48,7 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                 )))
 }
 
-pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
+pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     if case.action == "parse_expression_template" {
         return execute_parser(case);
     }
@@ -104,6 +104,9 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     }
     if let Some(expected) = &case.expect {
         assert_components(&processor, &functions, expected)?;
+        if suite == "core/index_function.yaml" {
+            super::nodes::assert_mounted_indices(processor, expected)?;
+        }
     }
     Ok(())
 }
