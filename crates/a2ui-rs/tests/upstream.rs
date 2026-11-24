@@ -27,6 +27,8 @@ mod resolution;
 mod routing;
 #[path = "upstream/rpc.rs"]
 mod rpc;
+#[path = "upstream/scaling.rs"]
+mod scaling;
 #[path = "upstream/validation.rs"]
 mod validation;
 
@@ -114,6 +116,14 @@ fn upstream_submodule_and_case_inventory() -> Result<(), TestError> {
         .map_err(|_| "upstream audit worker panicked")?
 }
 
+#[test]
+#[ignore = "Run in the independent processor timing job"]
+fn upstream_processor_scaling() -> Result<(), TestError> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    verify_submodule(&root)?;
+    scaling::run(&root.join("fixtures/upstream"))
+}
+
 fn audit(root: &Path) -> Result<(), TestError> {
     let revision = verify_submodule(root)?;
     let upstream = root.join("fixtures/upstream");
@@ -171,14 +181,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 }
             } else {
                 pending += 1;
-                (
-                    "skipped",
-                    Some(format!(
-                        "pending implementation: {} {}",
-                        case.action,
-                        case.definition.as_deref().unwrap_or("")
-                    )),
-                )
+                ("skipped", Some(pending_reason(&suite_name, &case)))
             };
             records.push(Record {
                 harness: "a2ui-rs-protocol",
@@ -213,6 +216,17 @@ fn audit(root: &Path) -> Result<(), TestError> {
         return Err(failures.join("\n").into());
     }
     Ok(())
+}
+
+fn pending_reason(suite: &str, case: &Case) -> String {
+    if suite == scaling::SUITE {
+        return "Run the separate processor scaling test.".to_owned();
+    }
+    format!(
+        "pending implementation: {} {}",
+        case.action,
+        case.definition.as_deref().unwrap_or("")
+    )
 }
 
 fn core_suites(upstream: &Path) -> Result<Vec<PathBuf>, TestError> {
