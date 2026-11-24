@@ -69,9 +69,12 @@ Omitted rules use strict validation. The next call to `apply` uses the processor
 
 Use `ValidationError::renderer_error` to build an error envelope for a rejected surface message.
 Supply the surface ID from the rejected message.
-Duplicate component IDs give `INTEGRITY_ERROR`.
+Duplicate surface or component IDs give `INTEGRITY_ERROR`.
+Unknown surfaces, dangling child references, and orphaned components also give `INTEGRITY_ERROR`.
 Component cycles give `RECURSION_LIMIT_EXCEEDED`.
 Missing and unknown catalogs give `CATALOG_NOT_FOUND`.
+An invalid data pointer gives `VALIDATION_FAILED` at `/path`.
+Other data model write errors give `DATA_ERROR`.
 
 ## Data model
 

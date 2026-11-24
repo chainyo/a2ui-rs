@@ -7,10 +7,12 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::catalog::{Catalog, CatalogError};
+use crate::data_model::DataError;
 use crate::expression::{Expression, parse_template};
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
     GenericError, RendererError, RendererToAgent, RendererToAgentMessage, UpdateDataModel,
+    ValidationCode, ValidationError as ProtocolValidationError,
 };
 use crate::resolution::{
     DataScope, LocalFunctions, ResolveError, ResolvedComponent, Resolver, validate_call_shape,
@@ -552,25 +554,44 @@ pub enum ValidationError {
 }
 
 impl ValidationError {
-    /// Builds a renderer error for duplicate component IDs, component cycles, or catalog lookup failures.
+    /// Builds a renderer error for supported surface, graph, catalog, and data errors.
     ///
     /// Supply the surface ID from the rejected message.
     /// Returns `None` for other validation failures.
     #[must_use]
     pub fn renderer_error(&self, surface_id: &str) -> Option<RendererToAgentMessage> {
-        let code = match self {
-            Self::Surface(SurfaceError::DuplicateComponent(_)) => "INTEGRITY_ERROR",
-            Self::SelfReference(_) | Self::CircularReference(_) => "RECURSION_LIMIT_EXCEEDED",
-            Self::MissingCatalog | Self::UnknownCatalog(_) => "CATALOG_NOT_FOUND",
-            _ => return None,
-        };
-        Some(RendererToAgentMessage::V1(RendererToAgent::Error(
+        let error = if let Self::Surface(SurfaceError::Data {
+            source: source @ DataError::InvalidPointer(_),
+            ..
+        }) = self
+        {
+            RendererError::Validation(ProtocolValidationError {
+                code: ValidationCode::ValidationFailed,
+                message: format!("Invalid updateDataModel path. {source}"),
+                surface_id: surface_id.to_owned(),
+                path: "/path".to_owned(),
+            })
+        } else {
+            let code = match self {
+                Self::Surface(
+                    SurfaceError::DuplicateSurface(_)
+                    | SurfaceError::DuplicateComponent(_)
+                    | SurfaceError::UnknownSurface(_),
+                )
+                | Self::DanglingReference { .. }
+                | Self::Orphan(_) => "INTEGRITY_ERROR",
+                Self::SelfReference(_) | Self::CircularReference(_) => "RECURSION_LIMIT_EXCEEDED",
+                Self::MissingCatalog | Self::UnknownCatalog(_) => "CATALOG_NOT_FOUND",
+                Self::Surface(SurfaceError::Data { .. }) => "DATA_ERROR",
+                _ => return None,
+            };
             RendererError::Generic(GenericError {
                 code: code.to_owned(),
                 message: self.to_string(),
                 target: ErrorTarget::SurfaceId(surface_id.to_owned()),
                 extra: BTreeMap::new(),
-            }),
-        )))
+            })
+        };
+        Some(RendererToAgentMessage::V1(RendererToAgent::Error(error)))
     }
 }

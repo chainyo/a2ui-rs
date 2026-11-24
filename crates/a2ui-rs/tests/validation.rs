@@ -142,7 +142,14 @@ fn rejected_self_reference_reports_the_surface_and_keeps_the_mounted_tree()
     let Err(error) = session.receive(dangling, now) else {
         return Err("expected the dangling child to fail".into());
     };
-    assert!(error.renderer_error_for_surface(surface).is_none());
+    assert_eq!(
+        serde_json::to_value(error.renderer_error_for_surface(surface))?,
+        json!({"version": "1.0", "error": {
+            "code": "INTEGRITY_ERROR",
+            "surfaceId": surface,
+            "message": "Dangling reference: component 'root' references non-existent component 'missing' in field 'slots[1]'"
+        }})
+    );
     let update = session.advance(now, None);
     assert!(update.nodes.is_empty());
     assert!(update.errors.is_empty());
