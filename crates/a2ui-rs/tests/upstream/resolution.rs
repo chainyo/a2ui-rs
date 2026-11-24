@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use a2ui_rs::basic_catalog::register_validation_functions;
+use a2ui_rs::basic_catalog::{
+    FormattingOptions, register_formatting_functions, register_validation_functions,
+};
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::expression::{Expression, parse_template};
 use a2ui_rs::resolution::{DataScope, LocalFunctions, ResolveError, ResolvedComponent};
@@ -16,7 +18,8 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
     }
     if suite == "core/functions.yaml" && case.action == "evaluate_function" {
         if case.protocol_version.as_deref() == Some("1.0")
-            && case.name.starts_with("test_evaluate_function_regex_v10_")
+            && (case.name.starts_with("test_evaluate_function_regex_v10_")
+                || is_formatting_case(&case.name))
         {
             return true;
         }
@@ -44,7 +47,8 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         && case.action == "validate"
         && (suite == "core/index_function.yaml"
             || (suite == "core/functions.yaml"
-                && case.name == "test_function_invalid_argument_schema_error")
+                && (case.name == "test_function_invalid_argument_schema_error"
+                    || is_formatting_case(&case.name)))
             || (suite == "core/expressions.yaml"
                 && matches!(
                     case.name.as_str(),
@@ -54,6 +58,21 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                         | "test_expression_parser_syntax_error_unclosed_brace"
                         | "test_expression_parser_max_depth_exceeded_error"
                 )))
+}
+
+fn is_formatting_case(name: &str) -> bool {
+    matches!(
+        name,
+        "test_function_format_date_tr35_tokens"
+            | "test_function_format_currency_locale_and_symbol"
+            | "test_function_pluralize_categories"
+            | "test_evaluate_function_format_date_keeps_written_offset"
+            | "test_evaluate_function_v10_format_string_template_call_inherits_catalog_without_default"
+            | "test_evaluate_function_v10_format_string_template_call_inherits_named_catalog_over_default"
+            | "test_evaluate_function_v10_format_string_template_call_inherits_catalog_nested"
+            | "test_evaluate_function_v10_validation_result_coerced_in_format_number_grouping"
+            | "test_evaluate_function_v10_validation_result_coerced_in_format_number_grouping_valid"
+    )
 }
 
 pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
@@ -69,7 +88,14 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
     catalog["catalogId"] = Value::from("basic");
     let mut processor = MessageProcessor::default();
     processor.add_catalog(Catalog::from_json(catalog, &common)?)?;
-    let functions = LocalFunctions::default();
+    let mut functions = LocalFunctions::default();
+    if is_formatting_case(&case.name) {
+        register_formatting_functions(
+            &mut functions,
+            "basic",
+            FormattingOptions::new("en-US", "UTC")?,
+        );
+    }
 
     for step in &case.steps {
         let messages = step["payload"]
@@ -150,10 +176,15 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
         call["catalogId"] = Value::from(id.clone());
     }
     let mut functions = LocalFunctions::default();
-    register_validation_functions(
-        &mut functions,
-        "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
-    );
+    let basic = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json";
+    register_validation_functions(&mut functions, basic);
+    if is_formatting_case(&case.name) {
+        register_formatting_functions(
+            &mut functions,
+            basic,
+            FormattingOptions::new("en-US", "UTC")?,
+        );
+    }
     let actual = processor.resolve_value("main", &DataScope::default(), &call, &functions);
     match (actual, &case.expect, &case.expect_error) {
         (Ok(actual), Some(expected), None) if actual == *expected => Ok(()),

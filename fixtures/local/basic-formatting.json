@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "invoice",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {
+      "total": 1234.5,
+      "count": 1,
+      "sentAt": "2026-07-01T12:00:00"
+    },
+    "components": [
+      {"id": "root", "component": "Column", "children": ["total", "currency", "sent", "sentLocal", "count"]},
+      {
+        "id": "total",
+        "component": "Text",
+        "text": {"@call": "formatNumber", "args": {"value": {"@path": "/total"}, "decimals": 2}}
+      },
+      {
+        "id": "currency",
+        "component": "Text",
+        "text": {
+          "@call": "formatCurrency",
+          "args": {"value": {"@path": "/total"}, "currency": "EUR", "decimals": 3, "grouping": false}
+        }
+      },
+      {
+        "id": "sent",
+        "component": "Text",
+        "text": {"@call": "formatDate", "args": {"value": {"@path": "/sentAt"}, "format": "ISO"}}
+      },
+      {
+        "id": "sentLocal",
+        "component": "Text",
+        "text": {"@call": "formatDate", "args": {"value": {"@path": "/sentAt"}, "format": "EEEE, d. MMMM yyyy (E)"}}
+      },
+      {
+        "id": "count",
+        "component": "Text",
+        "text": {"@call": "pluralize", "args": {"value": {"@path": "/count"}, "one": "Eine Position", "other": "Mehrere Positionen"}}
+      }
+    ]
+  }
+}

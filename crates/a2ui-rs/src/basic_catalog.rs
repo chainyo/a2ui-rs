@@ -5,7 +5,10 @@ use serde_json::{Value, json};
 use crate::protocol::JsonObject;
 use crate::resolution::{LocalFunctions, to_boolean};
 
+mod formatting;
 mod regex;
+
+pub use formatting::{FormattingOptions, FormattingOptionsError, register_formatting_functions};
 
 /// Registers the Basic Catalog validators and boolean functions.
 ///
