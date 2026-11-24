@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 boon.workspace = true
+fancy-regex.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 thiserror.workspace = true

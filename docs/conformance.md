@@ -20,6 +20,7 @@ Mounted action cases check catalog action properties and metadata on emitted eve
 Node metadata cases compare property and metadata notification counts for the same node IDs.
 The mounted validation cases check warning and info results, email validation, and boolean composition.
 Function cases check how `and` and `not` use the result of `required`.
+The regex cases check matching, pattern rejection, and input limits.
 The accessibility cases compare resolved attributes on mounted nodes.
 The report keeps these cases pending until an adapter verifies the platform and axe-core assertions.
 The pointer and deletion suites apply message payloads to one data model and compare the final JSON.
@@ -94,6 +95,14 @@ Inventory success must never become that gate.
 The RPC fixtures exercise errors in mounted checks and action pipelines.
 Check cases compare the validation result and the correlated renderer error.
 Action cases compare the surface data and the correlated renderer error.
+
+## Check rule message precedence
+
+The v1.0 protocol uses a failed function's message when the function supplies one.
+The rule message supplies a fallback when the function omits its message.
+The pinned `test_validation_result_multiple_rules_preserve_order` fixture expects the rule's fallback message in place of the email function's message.
+The harness checks the protocol message and the fixture's rule order.
+The report keeps the full fixture pending until its message expectation agrees with the protocol.
 
 ## Updates
 

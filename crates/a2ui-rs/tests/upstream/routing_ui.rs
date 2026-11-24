@@ -268,6 +268,8 @@ pub(super) fn supports_check_metadata(suite: &str, case: &Case) -> bool {
                 | "test_validation_result_dynamic_object_return"
                 | "test_validation_result_reactive_recovery_on_data_update"
                 | "test_validation_result_coercion_in_logical_and_or_not"
+                | "test_validation_result_boolean_fallback"
+                | "test_validation_result_multiple_rules_preserve_order"
         )
 }
 
@@ -293,11 +295,16 @@ pub(super) fn execute_check_metadata(upstream: &Path, case: &Case) -> Result<(),
             }
         }
         if let Some(expected) = step.get("expect") {
-            assert_check_properties(&session, surface, expected)?;
+            assert_check_properties(&session, surface, expected, false)?;
         }
     }
     if let Some(expected) = &case.expect {
-        assert_check_properties(&session, surface, expected)?;
+        assert_check_properties(
+            &session,
+            surface,
+            expected,
+            case.name == "test_validation_result_multiple_rules_preserve_order",
+        )?;
     }
     Ok(())
 }
@@ -306,6 +313,7 @@ fn assert_check_properties(
     session: &RoutingSession<'_>,
     surface: &str,
     expected: &Value,
+    fallback_discrepancy: bool,
 ) -> Result<(), TestError> {
     let expected = &expected["surfaces"][surface];
     let tree = session.node_tree(surface).ok_or("missing mounted tree")?;
@@ -337,11 +345,37 @@ fn assert_check_properties(
                     .ok_or("missing validation property")?
                     .value
             };
+            let mut expected = expected.clone();
+            if fallback_discrepancy && id == "root" {
+                check_protocol_message(name, &mut expected)?;
+            }
+            // The singular fixture field is a projection of the first result.
+            let mut value = value.clone();
+            if name == "validationResult"
+                && expected.get("severity").is_none()
+                && let Some(object) = value.as_object_mut()
+            {
+                object.remove("severity");
+            }
             if value != expected {
                 return Err(format!("unexpected {name} on {id}: {value}").into());
             }
         }
     }
+    Ok(())
+}
+
+fn check_protocol_message(name: &str, expected: &mut Value) -> Result<(), TestError> {
+    let message = match name {
+        "validationErrors" => &mut expected[0],
+        "validationResults" => &mut expected[0]["message"],
+        _ => return Ok(()),
+    };
+    if *message != "Must be a valid email address." {
+        return Err("the pinned fallback discrepancy changed".into());
+    }
+    // The protocol uses the rule message only when the function omits its message.
+    *message = json!("Please enter a valid email address (e.g. user@example.com).");
     Ok(())
 }
 
