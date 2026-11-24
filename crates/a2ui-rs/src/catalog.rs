@@ -8,7 +8,7 @@ use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::protocol::{Component, FunctionCall, Metadata};
+use crate::protocol::{Component, FunctionCall, JsonObject, Metadata};
 
 const CATALOG: &str = "https://a2ui.org/specification/v1_0/catalog.json";
 const COMMON: &str = "https://a2ui.org/specification/v1_0/common_types.json";
@@ -252,6 +252,22 @@ impl Catalog {
 
     pub(crate) fn function_schema(&self, name: &str) -> &Value {
         &self.document["functions"][name]
+    }
+
+    pub(crate) fn preserve_required_local_arguments(
+        &self,
+        call: &FunctionCall,
+        args: &mut JsonObject,
+    ) {
+        let Some(authored) = &call.args else { return };
+        let required = self.function_schema(&call.name)["properties"]["args"]["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        for name in required.filter(|name| authored.contains_key(*name)) {
+            args.entry(name.to_owned()).or_insert(Value::Null);
+        }
     }
 
     pub(crate) fn apply_function_defaults(&self, call: &mut FunctionCall) {

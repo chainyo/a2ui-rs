@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "deliveries",
+    "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+    "dataModel": {
+      "deliveries": [
+        {"city": "London"},
+        {"city": "Bristol", "contact": "Riley"}
+      ]
+    },
+    "components": [
+      {"id": "root", "component": "Column", "children": {"componentId": "contact", "path": "/deliveries"}},
+      {
+        "id": "contact",
+        "component": "TextField",
+        "label": {"@path": "city"},
+        "value": {"@path": "contact"},
+        "@checks": [{
+          "condition": {"@call": "required", "args": {"value": {"@path": "contact"}}},
+          "message": "Enter a delivery contact"
+        }]
+      }
+    ]
+  }
+}

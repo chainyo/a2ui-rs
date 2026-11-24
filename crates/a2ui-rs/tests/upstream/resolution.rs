@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use a2ui_rs::basic_catalog::register_validation_functions;
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::expression::{Expression, parse_template};
 use a2ui_rs::resolution::{DataScope, LocalFunctions, ResolveError, ResolvedComponent};
@@ -26,6 +27,8 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                 | "test_evaluate_function_v10_nested_call_does_not_inherit_catalog"
                 | "test_evaluate_function_v10_format_string_template_call_missing_in_inherited_catalog_errors"
                 | "test_evaluate_function_v10_format_string_index_stays_catalogless_without_default"
+                | "test_evaluate_function_v10_validation_result_coerced_in_not_operand_on_surface"
+                | "test_evaluate_function_v10_validation_result_coerced_in_and_operands_on_surface"
         );
     }
     let version = case
@@ -132,18 +135,21 @@ fn execute_function(upstream: &Path, case: &Case, common: &Value) -> Result<(), 
     {
         create["catalogId"] = default_catalog.clone();
     }
+    if let Some(data) = &case.data_model {
+        create["dataModel"] = data.clone();
+    }
     let message = json!({"version": "1.0", "createSurface": create});
     processor.apply(serde_json::from_value(message)?)?;
     let mut call = json!({"@call": case.function, "args": case.args});
     if let Some(id) = &case.catalog_id {
         call["catalogId"] = Value::from(id.clone());
     }
-    let actual = processor.resolve_value(
-        "main",
-        &DataScope::default(),
-        &call,
-        &LocalFunctions::default(),
+    let mut functions = LocalFunctions::default();
+    register_validation_functions(
+        &mut functions,
+        "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
     );
+    let actual = processor.resolve_value("main", &DataScope::default(), &call, &functions);
     match (actual, &case.expect, &case.expect_error) {
         (Ok(actual), Some(expected), None) if actual == *expected => Ok(()),
         (Err(error), None, Some(expected)) => {
