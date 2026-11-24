@@ -89,6 +89,12 @@ pub struct SurfaceStore {
 }
 
 impl SurfaceStore {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &Surface)> {
+        self.surfaces
+            .iter()
+            .map(|(id, surface)| (id.as_str(), surface))
+    }
+
     /// Returns the active surface with this ID, if it exists.
     #[must_use]
     pub fn get(&self, surface_id: &str) -> Option<&Surface> {

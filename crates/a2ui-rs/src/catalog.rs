@@ -55,6 +55,12 @@ impl CatalogRegistry {
         }
     }
 
+    pub(crate) fn in_registration_order(&self) -> Vec<&Catalog> {
+        let mut entries: Vec<_> = self.entries.values().collect();
+        entries.sort_unstable_by_key(|(index, _)| *index);
+        entries.into_iter().map(|(_, catalog)| catalog).collect()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
@@ -142,6 +148,28 @@ impl Catalog {
             },
             {"$ref": "#/$defs/IndexSystemFunction"}
         ]}));
+
+        if let Some(entries) = local.get_mut("components").and_then(Value::as_object_mut) {
+            for schema in entries.values_mut() {
+                if let Some(schema) = schema.as_object_mut()
+                    && schema.get("additionalProperties") == Some(&Value::Bool(false))
+                    && let Some(properties) = schema
+                        .entry("properties")
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                {
+                    for field in [
+                        "id",
+                        "component",
+                        "@catalogId",
+                        "@metadata",
+                        "@accessibility",
+                    ] {
+                        properties.entry(field).or_insert(Value::Bool(true));
+                    }
+                }
+            }
+        }
 
         let registry = Registry::new()
             .draft(Draft::Draft202012)
@@ -285,7 +313,15 @@ impl Catalog {
     /// # Errors
     /// Returns an error if the function name is unknown or an argument is invalid.
     pub fn validate_function(&self, call: &FunctionCall) -> Result<(), CatalogError> {
-        Self::validate_entry(&self.functions, &call.name, call, None)
+        self.validate_function_at(call, None)
+    }
+
+    pub(crate) fn validate_function_at(
+        &self,
+        call: &FunctionCall,
+        base: Option<&str>,
+    ) -> Result<(), CatalogError> {
+        Self::validate_entry(&self.functions, &call.name, call, base)
     }
 
     fn validate_entry(
@@ -322,6 +358,44 @@ impl Catalog {
 
     pub(crate) fn component_schema(&self, name: &str) -> &Value {
         &self.document["components"][name]
+    }
+
+    pub(crate) fn has_custom_component_property(&self, kind: &str, name: &str) -> bool {
+        let mut pending = vec![self.component_schema(kind)];
+        let mut visited = BTreeSet::new();
+        while let Some(schema) = pending.pop() {
+            if !visited.insert(std::ptr::from_ref(schema)) {
+                continue;
+            }
+            let properties = &schema["properties"];
+            if let Some(property) = properties.get(name) {
+                let inline_common = properties.get("id").is_some()
+                    && match name {
+                        "catalogId" => property["type"] == "string",
+                        "metadata" => {
+                            property["type"] == "object"
+                                && property["properties"].as_object().is_some_and(|fields| {
+                                    fields.len() == 1 && fields.contains_key("extensions")
+                                })
+                        }
+                        _ => false,
+                    };
+                if !inline_common {
+                    return true;
+                }
+            }
+            for keyword in ["allOf", "anyOf", "oneOf"] {
+                if let Some(branches) = schema[keyword].as_array() {
+                    pending.extend(branches);
+                }
+            }
+            if let Some(reference) = schema["$ref"].as_str()
+                && let Some(target) = self.schema_target(reference, false)
+            {
+                pending.push(target);
+            }
+        }
+        false
     }
 
     pub(crate) fn function_schema(&self, name: &str) -> &Value {

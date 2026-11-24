@@ -46,6 +46,23 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
         )
 }
 
+pub(super) fn uses_legacy_fixture(
+    upstream: &Path,
+    suite: &str,
+    case: &Case,
+) -> Result<bool, TestError> {
+    let Some(path) = case
+        .fixture
+        .as_ref()
+        .filter(|_| suite == "core/node_resolution.yaml")
+    else {
+        return Ok(false);
+    };
+    let path = upstream.join("conformance").join(path);
+    let fixture: Fixture = serde_saphyr::from_str(&fs::read_to_string(path)?)?;
+    Ok(fixture.catalog.iter().any(|part| part == "v0_9_1"))
+}
+
 pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let path = case.fixture.as_ref().ok_or("missing node fixture")?;
     let conformance = upstream.join("conformance");
