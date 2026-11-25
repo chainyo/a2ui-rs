@@ -18,8 +18,6 @@ exceptions = [
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"
-# Permit the path-only dev dependency on the Basic Catalog.
-allow-wildcard-paths = true
 highlight = "all"
 skip = [{ crate = "syn@2.0.119", reason = "strum_macros uses syn 2. Other SDK dependencies use syn 3." }]
 

@@ -34,7 +34,7 @@ An invalid input must fail deserialization.
 Run the Core harness with:
 
 ```sh
-mise exec -- cargo test --package a2ui-rs --test upstream --locked -- --nocapture
+mise exec -- cargo test --package a2ui-rs --features catalog --test upstream --locked -- --nocapture
 ```
 
 The harness verifies the Git pin, the clean checkout, and the required reference paths.

@@ -6,6 +6,9 @@ A framework-independent Rust SDK for [A2UI](https://a2ui.org/), targeting protoc
 > Our goal is a complete, conformant Rust implementation that can earn upstream adoption.
 > This is a community project. Google and the A2UI project do not endorse or maintain this repository.
 
+Enable the `catalog` feature to register the Basic Catalog functions.
+See [Basic Catalog functions](docs/architecture.md#basic-catalog-functions).
+
 ## Headless example
 
 Run the contact form example with Cargo.

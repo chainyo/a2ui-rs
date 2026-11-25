@@ -3,8 +3,8 @@
 use serde_json::{Value, json};
 use url::Url;
 
-use a2ui_rs::protocol::JsonObject;
-use a2ui_rs::resolution::{LocalFunctions, to_boolean};
+use crate::protocol::JsonObject;
+use crate::resolution::{LocalFunctions, to_boolean};
 
 mod formatting;
 mod regex;

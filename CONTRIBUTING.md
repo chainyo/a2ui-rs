@@ -30,13 +30,14 @@ Run the same quality task as CI:
 mise run check
 ```
 
-The task runs formatting, all-target build checks, Clippy, Rustdoc, actionlint, and cargo-deny.
+The task checks build targets with and without the Basic Catalog feature.
+It also runs formatting, Clippy, Rustdoc, actionlint, and cargo-deny.
 It compiles test targets without executing tests.
 Run tests locally for behavior changes and before a package release:
 
 ```sh
 mise run test
-mise exec -- cargo test --package a2ui-rs --test upstream --locked
+mise exec -- cargo test --package a2ui-rs --features catalog --test upstream --locked
 ```
 
 Use `mise exec -- COMMAND` to run a pinned tool without shell activation.
@@ -71,14 +72,13 @@ mise run test
 
 Version tags identify SDK releases. They do not identify the A2UI protocol version.
 
-Verify both package archives together after approval to publish.
+Verify the package archive with the Basic Catalog feature.
 
 ```sh
-mise exec -- cargo package --workspace --locked
+mise exec -- cargo package --package a2ui-rs --all-features --locked
 ```
 
-Cargo uses the Core package to verify the Basic Catalog package.
-The archives omit integration tests that use fixtures from the repository.
+The archive omits integration tests that use fixtures from the repository.
 Create a release tag only when a release is explicitly requested.
 
 ## Fixtures
