@@ -1,0 +1,31 @@
+{
+  "catalogId": "https://example.com/contact-catalog.json",
+  "protocolVersion": "1.0",
+  "components": {
+    "ContactForm": {
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": { "$ref": "common_types.json#/$defs/ComponentId" }
+        },
+        "preview": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["children", "preview"]
+    },
+    "TextField": {
+      "type": "object",
+      "properties": {
+        "value": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["value"]
+    },
+    "Button": {
+      "type": "object",
+      "properties": {
+        "action": { "$ref": "common_types.json#/$defs/Action" }
+      },
+      "required": ["action"]
+    }
+  }
+}

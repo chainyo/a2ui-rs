@@ -10,7 +10,7 @@ license = "Apache-2.0"
 repository = "https://github.com/chainyo/a2ui-rs"
 
 [workspace.dependencies]
-a2ui-basic-catalog = { version = "0.1.0", path = "crates/a2ui-basic-catalog" }
+a2ui-basic-catalog = { path = "crates/a2ui-basic-catalog" }
 a2ui-rs = { version = "0.1.0", path = "crates/a2ui-rs" }
 fancy-regex = { version = "0.20.2", default-features = false, features = ["std"] }
 fixed_decimal = { version = "0.7", features = ["ryu"] }

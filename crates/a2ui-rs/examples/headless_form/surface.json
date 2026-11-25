@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "createSurface": {
+    "surfaceId": "contact",
+    "catalogId": "https://example.com/contact-catalog.json",
+    "dataModel": { "name": "Sam" },
+    "components": [
+      {
+        "id": "root",
+        "component": "ContactForm",
+        "children": ["name", "submit"],
+        "preview": { "@path": "/name" }
+      },
+      {
+        "id": "name",
+        "component": "TextField",
+        "value": { "@path": "/name" }
+      },
+      {
+        "id": "submit",
+        "component": "Button",
+        "action": {
+          "event": {
+            "name": "submitContact",
+            "context": { "name": { "@path": "/name" } }
+          }
+        }
+      }
+    ]
+  }
+}
