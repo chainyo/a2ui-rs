@@ -599,7 +599,11 @@ fn to_text(value: &Value) -> String {
     }
 }
 
-pub(crate) fn to_boolean(value: &Value) -> bool {
+/// Converts a resolved value to a v1.0 dynamic boolean.
+///
+/// A validation result uses its boolean `valid` field.
+#[must_use]
+pub fn to_boolean(value: &Value) -> bool {
     match value {
         Value::Bool(value) => *value,
         Value::String(value) => value.eq_ignore_ascii_case("true"),

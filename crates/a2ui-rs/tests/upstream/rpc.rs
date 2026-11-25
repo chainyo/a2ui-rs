@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use a2ui_rs::basic_catalog::{FormattingOptions, register_formatting_functions};
+use a2ui_basic_catalog::{FormattingOptions, register_formatting_functions};
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::{CallAgentFunction, RendererToAgentMessage};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};

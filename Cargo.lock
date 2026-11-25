@@ -3,9 +3,10 @@
 version = 4
 
 [[package]]
-name = "a2ui-rs"
+name = "a2ui-basic-catalog"
 version = "0.1.0"
 dependencies = [
+ "a2ui-rs",
  "fancy-regex",
  "fixed_decimal",
  "icu_calendar",
@@ -16,6 +17,18 @@ dependencies = [
  "icu_plurals",
  "icu_provider",
  "jiff",
+ "serde_json",
+ "thiserror",
+ "url",
+ "writeable",
+]
+
+[[package]]
+name = "a2ui-rs"
+version = "0.1.0"
+dependencies = [
+ "a2ui-basic-catalog",
+ "jiff",
  "jsonschema",
  "percent-encoding",
  "serde",
@@ -23,8 +36,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "unicode-ident",
- "url",
- "writeable",
 ]
 
 [[package]]

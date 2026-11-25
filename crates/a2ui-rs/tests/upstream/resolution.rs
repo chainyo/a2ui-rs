@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 
-use a2ui_rs::basic_catalog::{
+use a2ui_basic_catalog::{
     FormattingOptions, register_formatting_functions, register_validation_functions,
 };
 use a2ui_rs::catalog::{Catalog, CatalogError};
