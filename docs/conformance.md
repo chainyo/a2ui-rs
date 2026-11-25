@@ -113,12 +113,23 @@ The runner uses these results. Its JSONL status is `skipped` for pending and out
 Do not skip a case because it expects an error or uses strict validation.
 Recursion, invalid topology, disposal, notifications, data scopes, and RPC routing remain part of the relevant contract.
 Report partial coverage as partial coverage.
-A conformance gate must require a passing result for each required v1.0 case.
-Inventory success must never become that gate.
 
 The RPC fixtures exercise errors in mounted checks and action pipelines.
 Check cases compare the validation result and the correlated renderer error.
 Action cases compare the surface data and the correlated renderer error.
+
+## Release gate
+
+Run `mise run test-release` to check v1.0 Core coverage against the pinned suites.
+Package validation runs this check before publication.
+Each required case must pass or have an exception in `fixtures/local/conformance-exceptions.json`.
+Add the exact suite, case name, expected status, and reason for each exception.
+Use `skipped` for a known gap and `xfailed` for a verified fixture discrepancy.
+Remove an exception when the case passes or leaves the pinned suites.
+A failed test always blocks publication.
+
+Legacy cases and platform renderer checks are outside the release gate.
+Package validation checks processor scaling in a separate job.
 
 ## Validation transactions
 
@@ -213,7 +224,7 @@ For each update:
 
 1. Review changes to the v1.0 specification, SDK blueprints, and relevant suites.
 2. Initialize the proposed checkout with `git submodule update --init`.
-3. Run the integration tests and read the conformance report.
+3. Run `mise run test-release` and read the conformance report.
 4. Review added, removed, renamed, and changed cases.
 5. State any protocol or coverage change in the pull request.
 

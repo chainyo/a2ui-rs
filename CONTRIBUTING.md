@@ -67,7 +67,7 @@ Run the release tests locally with the pinned submodule initialized:
 
 ```sh
 git submodule update --init
-mise run test
+mise run test-release
 ```
 
 Version tags identify SDK releases. They do not identify the A2UI protocol version.

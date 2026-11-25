@@ -21,6 +21,8 @@ mod adapter;
 mod common_types;
 #[path = "upstream/events.rs"]
 mod events;
+#[path = "upstream/gate.rs"]
+mod gate;
 #[path = "upstream/nodes.rs"]
 mod nodes;
 #[path = "upstream/resolution.rs"]
@@ -105,6 +107,8 @@ struct Record {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+    #[serde(skip)]
+    required_for_release: bool,
 }
 
 #[test]
@@ -132,6 +136,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
     let revision = verify_submodule(root)?;
     let upstream = root.join("fixtures/upstream");
     let suites = core_suites(&upstream)?;
+    let exceptions = gate::Exceptions::load()?;
     let mut pending = 0;
     let mut passed = 0;
     let mut expected_failures = 0;
@@ -162,18 +167,21 @@ fn audit(root: &Path) -> Result<(), TestError> {
                     format!("missing or duplicate case name in {}", suite.display()).into(),
                 );
             }
-            let (status, reason) = if is_legacy_suite(suite)
+            let legacy = is_legacy_suite(suite)
                 || is_legacy_case(&suite_name, &case)
-                || nodes::uses_legacy_fixture(&upstream, &suite_name, &case)?
-            {
+                || nodes::uses_legacy_fixture(&upstream, &suite_name, &case)?;
+            let (status, mut reason) = if legacy {
                 out_of_scope += 1;
                 ("skipped", Some("legacy protocol outside scope".to_owned()))
             } else if supports_case(&suite_name, &case) {
                 match execute_supported_case(&upstream, &suite_name, &case) {
                     Ok(()) => {
-                        if let Some(reason) = expected_fixture_failure(&suite_name, &case) {
+                        if verifies_fixture_discrepancy(&suite_name, &case) {
                             expected_failures += 1;
-                            ("xfailed", Some(reason.to_owned()))
+                            (
+                                "xfailed",
+                                Some("Fixture discrepancy has no approved reason.".to_owned()),
+                            )
                         } else if let Some(reason) = pending_after_execution(&suite_name, &case) {
                             pending += 1;
                             ("skipped", Some(reason.to_owned()))
@@ -191,24 +199,23 @@ fn audit(root: &Path) -> Result<(), TestError> {
                 pending += 1;
                 ("skipped", Some(pending_reason(&suite_name, &case)))
             };
+            let required_for_release = gate::requires_core_case(&suite_name, &case.action, legacy);
+            if required_for_release
+                && let Some(approved) = exceptions.reason_for(&suite_name, &case.name, status)
+            {
+                reason = Some(approved.to_owned());
+            }
             records.push(Record {
                 harness: "a2ui-rs-protocol",
                 suite: suite_name.clone(),
                 case: case.name,
                 status,
                 reason,
+                required_for_release,
             });
         }
     }
-    let target = root.join("target/conformance");
-    fs::create_dir_all(&target)?;
-    let manifest = records
-        .iter()
-        .map(serde_json::to_string)
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n")
-        + "\n";
-    fs::write(target.join("protocol.jsonl"), manifest)?;
+    write_manifest(root, &records)?;
     println!(
         "Upstream {revision}: {} Core suites. {passed} passed, {} failed, {expected_failures} expected failures, {pending} pending, {out_of_scope} legacy cases outside scope.",
         suites.len(),
@@ -220,6 +227,23 @@ fn audit(root: &Path) -> Result<(), TestError> {
     if !failures.is_empty() {
         return Err(failures.join("\n").into());
     }
+    if std::env::var_os("A2UI_REQUIRE_CORE_CONFORMANCE").is_some() {
+        exceptions.verify(&records)?;
+        println!("v1.0 Core conformance gate passed.");
+    }
+    Ok(())
+}
+
+fn write_manifest(root: &Path, records: &[Record]) -> Result<(), TestError> {
+    let target = root.join("target/conformance");
+    fs::create_dir_all(&target)?;
+    let manifest = records
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n")
+        + "\n";
+    fs::write(target.join("protocol.jsonl"), manifest)?;
     Ok(())
 }
 
@@ -268,28 +292,12 @@ fn is_data_model_suite(suite: &str) -> bool {
 
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
-fn expected_fixture_failure(suite: &str, case: &Case) -> Option<&'static str> {
-    if rpc::activation_fixture(suite, case) {
-        Some(
-            "The fixture declares agent-callable activation, which the v1.0 catalog schema rejects. Local gesture checks passed.",
-        )
-    } else if rpc::nested_activation_fixture(suite, case) {
-        Some(
-            "The fixture declares agent-callable activation. Catalog rejection and nested RPC denial with rendererOnly passed.",
-        )
-    } else if routing::non_json_argument_fixture(suite, case) {
-        Some(
-            "The fixture expects a routing error for NaN or infinity. The Rust JSON boundary rejects these values before routing.",
-        )
-    } else if suite == "core/validation_result.yaml"
-        && case.name == "test_validation_result_multiple_rules_preserve_order"
-    {
-        Some(
-            "Rule order and validation passed. The fixture expects the fallback in place of the email function's message.",
-        )
-    } else {
-        None
-    }
+fn verifies_fixture_discrepancy(suite: &str, case: &Case) -> bool {
+    rpc::activation_fixture(suite, case)
+        || rpc::nested_activation_fixture(suite, case)
+        || routing::non_json_argument_fixture(suite, case)
+        || (suite == "core/validation_result.yaml"
+            && case.name == "test_validation_result_multiple_rules_preserve_order")
 }
 
 fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {

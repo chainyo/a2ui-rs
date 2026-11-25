@@ -1,0 +1,44 @@
+[
+  {
+    "suite": "core/agent_function_routing.yaml",
+    "case": "test_agent_routing_non_json_argument_fails_locally",
+    "status": "xfailed",
+    "reason": "Rust rejects non-finite values at the JSON boundary before the routing layer can return the fixture error."
+  },
+  {
+    "suite": "core/rpc_functions.yaml",
+    "case": "test_rpc_call_renderer_function_nested_template_user_activation_allowed",
+    "status": "xfailed",
+    "reason": "The fixture declares an agent-callable function that requires user activation. The v1.0 catalog schema rejects this declaration."
+  },
+  {
+    "suite": "core/rpc_functions.yaml",
+    "case": "test_rpc_call_renderer_function_nested_template_user_activation_denied",
+    "status": "xfailed",
+    "reason": "The fixture declares an agent-callable function that requires user activation. The v1.0 catalog schema rejects this declaration."
+  },
+  {
+    "suite": "core/rpc_functions.yaml",
+    "case": "test_rpc_call_renderer_function_nested_user_activation_denied",
+    "status": "xfailed",
+    "reason": "The fixture declares an agent-callable function that requires user activation. The v1.0 catalog schema rejects this declaration."
+  },
+  {
+    "suite": "core/rpc_functions.yaml",
+    "case": "test_rpc_call_renderer_function_requires_user_activation",
+    "status": "xfailed",
+    "reason": "The fixture declares an agent-callable function that requires user activation. The v1.0 catalog schema rejects this declaration."
+  },
+  {
+    "suite": "core/rpc_functions.yaml",
+    "case": "test_rpc_call_renderer_function_user_activation_denied",
+    "status": "xfailed",
+    "reason": "The fixture declares an agent-callable function that requires user activation. The v1.0 catalog schema rejects this declaration."
+  },
+  {
+    "suite": "core/validation_result.yaml",
+    "case": "test_validation_result_multiple_rules_preserve_order",
+    "status": "xfailed",
+    "reason": "The fixture expects the fallback in place of the email function's message. The protocol gives the function message priority."
+  }
+]
