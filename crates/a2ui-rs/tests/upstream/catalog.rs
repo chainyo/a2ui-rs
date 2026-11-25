@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use a2ui_rs::basic_catalog::register_validation_functions;
+use a2ui_basic_catalog::register_validation_functions;
 use a2ui_rs::catalog::{Catalog, CatalogDerivation, CatalogEntry, CatalogError};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::validation::MessageProcessor;

@@ -71,7 +71,6 @@ pub struct UnsupportedVersion {
     version: String,
 }
 
-pub mod basic_catalog;
 pub mod catalog;
 pub mod data_model;
 pub mod expression;

@@ -19,8 +19,8 @@ use serde_json::Value;
 use thiserror::Error;
 use writeable::TryWriteable;
 
-use crate::protocol::JsonObject;
-use crate::resolution::{LocalFunctions, to_boolean};
+use a2ui_rs::protocol::JsonObject;
+use a2ui_rs::resolution::{LocalFunctions, to_boolean};
 
 mod currency;
 

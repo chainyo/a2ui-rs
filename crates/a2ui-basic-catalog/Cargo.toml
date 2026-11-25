@@ -1,0 +1,29 @@
+[package]
+name = "a2ui-basic-catalog"
+description = "Optional implementations for the A2UI v1.0 Basic Catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+a2ui-rs.workspace = true
+fancy-regex.workspace = true
+fixed_decimal.workspace = true
+icu_calendar.workspace = true
+icu_datetime.workspace = true
+icu_decimal.workspace = true
+icu_experimental.workspace = true
+icu_locale_core.workspace = true
+icu_plurals.workspace = true
+icu_provider.workspace = true
+jiff.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+writeable.workspace = true

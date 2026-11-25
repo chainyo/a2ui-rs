@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use a2ui_rs::basic_catalog::{
+use a2ui_basic_catalog::{
     FormattingOptions, FormattingOptionsError, register_formatting_functions,
 };
 use a2ui_rs::catalog::Catalog;

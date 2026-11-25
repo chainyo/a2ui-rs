@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use a2ui_rs::basic_catalog::{FormattingOptions, register_formatting_functions};
+use a2ui_basic_catalog::{FormattingOptions, register_formatting_functions};
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::validation::{MessageProcessor, ValidationError};
