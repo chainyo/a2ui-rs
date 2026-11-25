@@ -15,6 +15,8 @@ use serde_json::Value;
 
 #[path = "upstream/accessibility.rs"]
 mod accessibility;
+#[path = "upstream/adapter.rs"]
+mod adapter;
 #[path = "upstream/common_types.rs"]
 mod common_types;
 #[path = "upstream/events.rs"]
@@ -274,6 +276,8 @@ fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
         Some(
             "Verified that non-finite arguments cannot enter the JSON protocol. The fixture expects a later routing diagnostic.",
         )
+    } else if adapter::supports(suite, case) {
+        Some("Core placeholder and node identity checks passed. Renderer assertions are pending.")
     } else if accessibility::supports(suite, case) {
         Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")
     } else if suite == "core/validation_result.yaml"
@@ -289,6 +293,7 @@ fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
 
 fn supports_case(suite: &str, case: &Case) -> bool {
     if accessibility::supports(suite, case)
+        || adapter::supports(suite, case)
         || common_types::supports(suite, case)
         || schemas::supports(suite, case)
         || events::supports(suite, case)
@@ -337,6 +342,8 @@ fn supports_direct_surface_case(case: &Case) -> bool {
 fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(), TestError> {
     if accessibility::supports(suite, case) {
         accessibility::execute(upstream, case)
+    } else if adapter::supports(suite, case) {
+        adapter::execute(upstream, case)
     } else if common_types::supports(suite, case) {
         common_types::execute(upstream, case)
     } else if schemas::supports(suite, case) {

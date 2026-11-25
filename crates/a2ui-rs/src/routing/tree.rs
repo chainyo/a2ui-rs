@@ -52,7 +52,7 @@ pub struct MountedNode {
     pub id: NodeId,
     /// The component definition ID.
     pub component_id: String,
-    /// The component type from the catalog.
+    /// The component type from the catalog. Empty for a pending node.
     pub component: String,
     /// The data scope for this instance.
     pub scope: DataScope,
@@ -62,6 +62,14 @@ pub struct MountedNode {
     pub properties: BTreeMap<String, MountedProperty>,
     /// The mounted children in order.
     pub children: Vec<MountedChild>,
+}
+
+impl MountedNode {
+    /// Returns true while the node waits for its component definition.
+    #[must_use]
+    pub fn is_pending(&self) -> bool {
+        self.component.is_empty()
+    }
 }
 
 /// The change to a mounted node.
@@ -342,7 +350,7 @@ impl RoutingSession<'_> {
             entries: BTreeMap::new(),
             errors: BTreeMap::new(),
         };
-        tree.root = reconcile.node("root", &DataScope::default(), None, tree.root);
+        tree.root = reconcile.node("root", &DataScope::default(), None, tree.root, false);
         let Reconcile {
             entries,
             previous,
@@ -485,6 +493,7 @@ impl PropertyEvaluation {
     }
 }
 
+#[derive(Default)]
 struct Definition {
     component: String,
     catalog_id: Option<String>,
@@ -607,24 +616,35 @@ impl Reconcile<'_> {
         scope: &DataScope,
         template_field: Option<&str>,
         old_id: Option<NodeId>,
+        allow_pending: bool,
     ) -> Option<NodeId> {
-        let definition = self.definitions.get(component_id)?;
+        let pending = Definition::default();
+        let definition = self
+            .definitions
+            .get(component_id)
+            .or_else(|| allow_pending.then_some(&pending))?;
         let mut entry = old_id
             .filter(|id| {
                 self.previous.get(id).is_some_and(|entry| {
                     entry.node.component_id == component_id
-                        && entry.node.component == definition.component
                         && entry.node.scope == *scope
-                        && entry.catalog_id == definition.catalog_id
+                        && (entry.node.is_pending()
+                            || (entry.node.component == definition.component
+                                && entry.catalog_id == definition.catalog_id))
                 })
             })
             .and_then(|id| self.previous.remove(&id))
             .unwrap_or_else(|| self.new_entry(component_id, definition, scope, template_field));
+        let upgraded = entry.node.is_pending() && !definition.component.is_empty();
+        if upgraded {
+            entry.node.component.clone_from(&definition.component);
+            entry.catalog_id.clone_from(&definition.catalog_id);
+        }
         self.mount_properties(&mut entry, definition);
         self.mount_checks(&mut entry, definition.check_count);
 
         let children = self.children(&entry, definition);
-        entry.next_children = (entry.node.children != children).then_some(children);
+        entry.next_children = (upgraded || entry.node.children != children).then_some(children);
         let id = entry.node.id;
         self.entries.insert(id, entry);
         Some(id)
@@ -657,9 +677,13 @@ impl Reconcile<'_> {
                             .remove(&(child.id.clone(), Some(child.field.clone())))
                             .unwrap_or_default();
                         for (index, scope) in scopes.iter().enumerate() {
-                            if let Some(id) =
-                                self.node(&child.id, scope, Some(&child.field), old.pop_front())
-                            {
+                            if let Some(id) = self.node(
+                                &child.id,
+                                scope,
+                                Some(&child.field),
+                                old.pop_front(),
+                                true,
+                            ) {
                                 children.push(MountedChild {
                                     field: format!("{}[{index}]", child.field),
                                     id,
@@ -678,7 +702,7 @@ impl Reconcile<'_> {
                 let old = previous
                     .get_mut(&(child.id.clone(), None))
                     .and_then(VecDeque::pop_front);
-                if let Some(id) = self.node(&child.id, &parent.node.scope, None, old) {
+                if let Some(id) = self.node(&child.id, &parent.node.scope, None, old, true) {
                     children.push(MountedChild {
                         field: child.field.clone(),
                         id,
