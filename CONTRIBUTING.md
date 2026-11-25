@@ -49,7 +49,7 @@ mise exec -- kingfisher scan . --staged --quiet --redact --no-validate --no-upda
 
 PR and main-branch CI run the quality task on Linux without executing tests or initializing the submodule.
 [Package validation](.github/workflows/package-validation.yml) runs integration and documentation tests on Linux, macOS, and Windows when a `v*` tag is pushed.
-A publishing workflow can call package validation and require its success before publication.
+[The release workflow](.github/workflows/release.yml) also runs package validation before it publishes the crate.
 Use Hawk only for an internal product with a suitable analysis target.
 
 ## Tool updates
@@ -80,6 +80,11 @@ mise exec -- cargo package --package a2ui-rs --all-features --locked
 
 The archive omits integration tests that use fixtures from the repository.
 Create a release tag only when a release is explicitly requested.
+
+Set the GitHub Actions secret `CARGO_REGISTRY_TOKEN` to a crates.io token.
+Give the token permission to publish a new crate for the first upload.
+Publish a GitHub release with a tag that matches the crate version.
+For example, use `v1.2.3` for crate version `1.2.3`.
 
 ## Fixtures
 
