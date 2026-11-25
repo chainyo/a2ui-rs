@@ -70,6 +70,15 @@ mise run test
 ```
 
 Version tags identify SDK releases. They do not identify the A2UI protocol version.
+
+Verify both package archives together after approval to publish.
+
+```sh
+mise exec -- cargo package --workspace --locked
+```
+
+Cargo uses the Core package to verify the Basic Catalog package.
+The archives omit integration tests that use fixtures from the repository.
 Create a release tag only when a release is explicitly requested.
 
 ## Fixtures
