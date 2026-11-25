@@ -1183,3 +1183,6 @@ impl ValidationError {
         Some(RendererToAgentMessage::V1(RendererToAgent::Error(error)))
     }
 }
+
+#[cfg(test)]
+mod parity;
