@@ -37,7 +37,7 @@ Run tests locally for behavior changes and before a package release:
 
 ```sh
 mise run test
-mise exec -- cargo test --package a2ui-rs --features catalog --test upstream --locked
+mise exec -- cargo test --package a2ui-rs --features basic-catalog --test upstream --locked
 ```
 
 Use `mise exec -- COMMAND` to run a pinned tool without shell activation.

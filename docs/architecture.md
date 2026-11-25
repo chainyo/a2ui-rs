@@ -140,7 +140,7 @@ Calls in a `formatString` template use its catalog. The system function `@index`
 
 ## Basic Catalog functions
 
-Enable the `catalog` feature to use the `a2ui_rs::basic_catalog` module.
+Enable the `basic-catalog` feature to use the `a2ui_rs::basic_catalog` module.
 Load the v1.0 Basic Catalog schema in Core before you register its functions.
 Use `basic_catalog::register_validation_functions` to register validators and boolean functions.
 It registers `required`, `email`, `numeric`, `length`, `regex`, `and`, `or`, and `not`.

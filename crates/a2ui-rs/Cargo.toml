@@ -10,14 +10,14 @@ publish = false
 exclude = ["/tests"]
 
 [package.metadata.docs.rs]
-features = ["catalog"]
+features = ["basic-catalog"]
 
 [lints]
 workspace = true
 
 [features]
 default = []
-catalog = [
+basic-catalog = [
   "dep:fancy-regex",
   "dep:fixed_decimal",
   "dep:icu_calendar",
@@ -57,16 +57,16 @@ serde-saphyr.workspace = true
 
 [[test]]
 name = "basic_formatting"
-required-features = ["catalog"]
+required-features = ["basic-catalog"]
 
 [[test]]
 name = "basic_open_url"
-required-features = ["catalog"]
+required-features = ["basic-catalog"]
 
 [[test]]
 name = "basic_validation"
-required-features = ["catalog"]
+required-features = ["basic-catalog"]
 
 [[test]]
 name = "upstream"
-required-features = ["catalog"]
+required-features = ["basic-catalog"]
