@@ -107,12 +107,13 @@ The runner uses these results. Its JSONL status is `skipped` for pending and out
 | Passed | Public implementation produced the expected state, event, or error |
 | Failed | The actual result differs from the upstream expectation |
 | Pending | The action or feature is not implemented |
+| Expected failure (`xfailed`) | The harness verifies the protocol behavior and records why the fixture expects a different result |
 | Outside scope | A precise version or layer reason excludes the case |
 
 Do not skip a case because it expects an error or uses strict validation.
 Recursion, invalid topology, disposal, notifications, data scopes, and RPC routing remain part of the relevant contract.
 Report partial coverage as partial coverage.
-A conformance gate must fail when required v1.0 cases are pending or failed.
+A conformance gate must require a passing result for each required v1.0 case.
 Inventory success must never become that gate.
 
 The RPC fixtures exercise errors in mounted checks and action pipelines.
@@ -171,13 +172,35 @@ The Basic Catalog rejects a missing event name before it stores the component.
 The missing-name fixture expects `INVALID_ACTION` during dispatch.
 The harness verifies catalog rejection and keeps the dispatch assertion pending.
 
-## Check rule message precedence
+## Fixture discrepancies
+
+### RPC activation
+
+The v1.0 catalog schema requires `rendererOnly` for functions that require user activation.
+The RPC activation fixtures supply `rendererOrAgent` for those functions.
+The harness checks catalog rejection, RPC denial, and gesture handling through a local renderer action.
+
+Use renderer actions to test execution with and without a gesture.
+Use a renderer RPC case to test denial of a `rendererOnly` function.
+Use an ungated `rendererOrAgent` function to test successful renderer RPC.
+
+### Non-finite arguments
+
+The Core blueprint requires local rejection of resolved arguments that have no JSON form.
+The Rust JSON boundary rejects NaN and infinity before routing.
+The harness checks this boundary and verifies that finite arguments still route from a binding and an action.
+
+Use the routing diagnostic for runtimes that accept non-finite values during expression evaluation.
+Use JSON boundary rejection for runtimes with JSON-only values.
+
+### Check rule message precedence
 
 The v1.0 protocol uses a failed function's message when the function supplies one.
 The rule message supplies a fallback when the function omits its message.
-The pinned `test_validation_result_multiple_rules_preserve_order` fixture expects the rule's fallback message in place of the email function's message.
-The harness checks the protocol message and the fixture's rule order.
-The report keeps the full fixture pending until its message expectation agrees with the protocol.
+The rule order fixture expects the fallback in place of the email function's message.
+The harness checks the function's message and the fixture's rule order.
+Use the email function's message in the corresponding error and result expectations.
+Keep the order, warning, and length fallback assertions.
 
 ## Updates
 

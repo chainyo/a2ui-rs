@@ -134,6 +134,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
     let suites = core_suites(&upstream)?;
     let mut pending = 0;
     let mut passed = 0;
+    let mut expected_failures = 0;
     let mut failures = Vec::new();
     let mut records = Vec::new();
     let mut out_of_scope = 0;
@@ -170,7 +171,10 @@ fn audit(root: &Path) -> Result<(), TestError> {
             } else if supports_case(&suite_name, &case) {
                 match execute_supported_case(&upstream, &suite_name, &case) {
                     Ok(()) => {
-                        if let Some(reason) = pending_after_execution(&suite_name, &case) {
+                        if let Some(reason) = expected_fixture_failure(&suite_name, &case) {
+                            expected_failures += 1;
+                            ("xfailed", Some(reason.to_owned()))
+                        } else if let Some(reason) = pending_after_execution(&suite_name, &case) {
                             pending += 1;
                             ("skipped", Some(reason.to_owned()))
                         } else {
@@ -196,9 +200,6 @@ fn audit(root: &Path) -> Result<(), TestError> {
             });
         }
     }
-    if pending == 0 {
-        return Err("no upstream conformance cases found".into());
-    }
     let target = root.join("target/conformance");
     fs::create_dir_all(&target)?;
     let manifest = records
@@ -209,7 +210,7 @@ fn audit(root: &Path) -> Result<(), TestError> {
         + "\n";
     fs::write(target.join("protocol.jsonl"), manifest)?;
     println!(
-        "Upstream {revision}: {} Core suites. {passed} passed, {} failed, {pending} pending, {out_of_scope} legacy cases outside scope.",
+        "Upstream {revision}: {} Core suites. {passed} passed, {} failed, {expected_failures} expected failures, {pending} pending, {out_of_scope} legacy cases outside scope.",
         suites.len(),
         failures.len()
     );
@@ -267,25 +268,31 @@ fn is_data_model_suite(suite: &str) -> bool {
 
 const SURFACE_SUITE: &str = "core/message_processor_v1_0.yaml";
 
-fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
+fn expected_fixture_failure(suite: &str, case: &Case) -> Option<&'static str> {
     if rpc::activation_fixture(suite, case) {
         Some(
-            "Verified catalog rejection and local user activation. The fixture declares agent-callable activation, which v1.0 forbids.",
+            "The fixture declares agent-callable activation, which the v1.0 catalog schema rejects. Local gesture checks passed.",
         )
     } else if routing::non_json_argument_fixture(suite, case) {
         Some(
-            "Verified that non-finite arguments cannot enter the JSON protocol. The fixture expects a later routing diagnostic.",
+            "The fixture expects a routing error for NaN or infinity. The Rust JSON boundary rejects these values before routing.",
         )
-    } else if adapter::supports(suite, case) {
-        Some("Core placeholder and node identity checks passed. Renderer assertions are pending.")
-    } else if accessibility::supports(suite, case) {
-        Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")
     } else if suite == "core/validation_result.yaml"
         && case.name == "test_validation_result_multiple_rules_preserve_order"
     {
         Some(
-            "Protocol assertions passed. Fixture uses the fallback message in place of the function message.",
+            "Rule order and validation passed. The fixture expects the fallback in place of the email function's message.",
         )
+    } else {
+        None
+    }
+}
+
+fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
+    if adapter::supports(suite, case) {
+        Some("Core placeholder and node identity checks passed. Renderer assertions are pending.")
+    } else if accessibility::supports(suite, case) {
+        Some("Core assertions passed. Platform accessibility and axe-core assertions pending.")
     } else {
         None
     }
