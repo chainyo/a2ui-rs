@@ -18,7 +18,9 @@ use crate::protocol::{
     FunctionCall, FunctionError, FunctionResponse, GenericError, RendererError, RendererToAgent,
     RendererToAgentMessage, ValidationCode, ValidationError as ProtocolValidationError,
 };
-use crate::resolution::{DataScope, LocalFunctions, ResolveError, Resolver, validate_call_shape};
+use crate::resolution::{
+    DataScope, LocalFunctions, ResolveError, Resolver, check_agent_caller, validate_call_shape,
+};
 use crate::validation::{MessageProcessor, ValidationError};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -406,34 +408,34 @@ impl RpcHandler {
         if schema.is_null() {
             return Err(invalid(format!("Function not found: {}", call.name)));
         }
-        if !matches!(
-            schema["allowedCallers"].as_str(),
-            Some("rendererOrAgent" | "agentOnly")
-        ) {
-            return Err(invalid(format!(
-                "Function '{}' cannot be called by agent (allowedCallers is rendererOnly).",
-                call.name,
-            )));
-        }
+        check_agent_caller(catalog, &call.name).map_err(invalid_error)?;
         if functions.action(catalog.id(), &call.name).is_some() {
             return Err(invalid_error(ResolveError::ActionContextRequired(
                 call.name,
             )));
         }
+        let resolver = resolver.for_agent_rpc();
         catalog.apply_function_defaults(&mut call);
+        resolver
+            .check_rpc_arguments(&call)
+            .map_err(inbound_argument_error)?;
         catalog
             .validate_function(&call)
             .map_err(|error| invalid(format!("Invalid function arguments: {error}")))?;
         let execution = catch_unwind(AssertUnwindSafe(|| {
             let args = resolver.rpc_arguments(&call, catalog)?;
-            functions.invoke(catalog.id(), &call.name, &args)
+            if functions.contains(catalog.id(), &call.name) {
+                functions.invoke(catalog.id(), &call.name, &args)
+            } else {
+                resolver.invoke_resolved(&DataScope::default(), catalog.id(), &call.name, &args)
+            }
         }));
         match execution {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(ResolveError::MissingHandler { .. })) => {
                 Err(invalid(format!("Function not found: {}", call.name)))
             }
-            Ok(Err(error)) => Err(execution_error(error)),
+            Ok(Err(error)) => Err(inbound_argument_error(error)),
             Err(_) => Err(RpcError::Execution(
                 "An error occurred during function execution.".to_owned(),
             )),
@@ -677,6 +679,13 @@ fn invalid(message: impl Into<String>) -> RpcError {
 
 fn invalid_error(error: impl std::fmt::Display) -> RpcError {
     invalid(error.to_string())
+}
+
+fn inbound_argument_error(error: ResolveError) -> RpcError {
+    match error {
+        ResolveError::RendererOnly(_) | ResolveError::UserActivation(_) => invalid_error(error),
+        _ => execution_error(error),
+    }
 }
 
 fn execution_error(error: ResolveError) -> RpcError {

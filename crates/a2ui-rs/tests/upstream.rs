@@ -273,6 +273,10 @@ fn expected_fixture_failure(suite: &str, case: &Case) -> Option<&'static str> {
         Some(
             "The fixture declares agent-callable activation, which the v1.0 catalog schema rejects. Local gesture checks passed.",
         )
+    } else if rpc::nested_activation_fixture(suite, case) {
+        Some(
+            "The fixture declares agent-callable activation. Catalog rejection and nested RPC denial with rendererOnly passed.",
+        )
     } else if routing::non_json_argument_fixture(suite, case) {
         Some(
             "The fixture expects a routing error for NaN or infinity. The Rust JSON boundary rejects these values before routing.",

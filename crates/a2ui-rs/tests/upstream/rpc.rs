@@ -1,9 +1,9 @@
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use a2ui_rs::basic_catalog::{FormattingOptions, register_formatting_functions};
 use a2ui_rs::catalog::{Catalog, CatalogError};
 use a2ui_rs::protocol::{CallAgentFunction, RendererToAgentMessage};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
@@ -61,8 +61,27 @@ pub(super) fn supports(suite: &str, case: &Case) -> bool {
                 | "test_rpc_call_renderer_function_index_at_root_execution_error"
                 | "test_rpc_call_renderer_function_protocol_version_mismatch"
                 | "test_rpc_call_renderer_function_format_string_arg_inherits_catalog"
+                | "test_rpc_call_renderer_function_nested_renderer_only_rejected"
+                | "test_rpc_call_renderer_function_nested_template_renderer_only_rejected"
+                | "test_rpc_call_renderer_function_nested_agent_only_allowed"
+                | "test_rpc_call_renderer_function_nested_template_mixed_error_prioritizes_boundary"
         )
         || activation_fixture(suite, case)
+        || nested_activation_fixture(suite, case)
+}
+
+pub(super) fn nested_activation_fixture(suite: &str, case: &Case) -> bool {
+    suite == "core/rpc_functions.yaml"
+        && case
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| catalog["protocolVersion"] == "1.0")
+        && matches!(
+            case.name.as_str(),
+            "test_rpc_call_renderer_function_nested_user_activation_denied"
+                | "test_rpc_call_renderer_function_nested_template_user_activation_denied"
+                | "test_rpc_call_renderer_function_nested_template_user_activation_allowed"
+        )
 }
 
 pub(super) fn activation_fixture(suite: &str, case: &Case) -> bool {
@@ -363,7 +382,8 @@ fn execute_inbound(
     common: &Value,
     mut basic: Value,
 ) -> Result<(), TestError> {
-    let input = &args["message"];
+    let mut input = args["message"].clone();
+    use_format_string(&mut input);
     let requested_id = input["callRendererFunction"]["callFunction"]["catalogId"].as_str();
     let catalog_id = if case.name == "test_rpc_call_renderer_function_unregistered_catalog" {
         "basic"
@@ -371,20 +391,21 @@ fn execute_inbound(
         requested_id.unwrap_or("basic")
     };
     basic["catalogId"] = Value::from("basic");
-    let mut catalog = if catalog_id == "basic" {
-        basic.clone()
-    } else {
-        json!({"protocolVersion": "1.0", "catalogId": catalog_id, "functions": {}})
-    };
+    let mut catalogs = BTreeMap::from([("basic", basic)]);
+    let activation = nested_activation_fixture("core/rpc_functions.yaml", case);
+    let mut gated_function = None;
+    let forbidden_invocations = Cell::new(0);
     let mut functions = LocalFunctions::default();
-    if case.name == "test_rpc_call_renderer_function_format_string_arg_inherits_catalog" {
-        register_formatting_functions(
-            &mut functions,
-            "basic",
-            FormattingOptions::new("en-US", "UTC")?,
-        );
-    }
     for (name, meta) in args["functionMetadata"].as_object().into_iter().flatten() {
+        let name = if name == "renderTemplate" {
+            "formatString"
+        } else {
+            name.as_str()
+        };
+        let id = meta["catalogId"].as_str().unwrap_or(catalog_id);
+        let catalog = catalogs
+            .entry(id)
+            .or_insert_with(|| json!({"protocolVersion": "1.0", "catalogId": id, "functions": {}}));
         let mut schema = json!({"type": "object", "properties": {"args": {"type": "object"} }});
         for key in ["allowedCallers", "requiresUserActivation"] {
             if let Some(value) = meta.get(key) {
@@ -402,21 +423,35 @@ fn execute_inbound(
         {
             branches.push(json!({"$ref": format!("#/functions/{name}")}));
         }
-        catalog["functions"][name] = schema;
-        match name.as_str() {
-            "playMedia" => functions.insert(catalog_id, name, |args| {
-                args.get("mediaId").and_then(Value::as_str).ok_or("missing media ID")?;
-                Ok(json!({"playing": args.get("autoplay") == Some(&Value::Bool(true)), "timestamp": 0}))
-            }),
-            "echoArgs" => functions.insert(catalog_id, name, |args| Ok(Value::Object(args.clone()))),
-            "failingFunction" => functions.insert(catalog_id, name, |_| Err("An error occurred during function execution.".to_owned())),
-            "syncState" => functions.insert(catalog_id, name, |_| Ok(Value::Null)),
-            _ => {}
+        if activation && schema["requiresUserActivation"] == true {
+            gated_function = Some((id, name));
         }
+        catalog["functions"][name] = schema;
+        register_inbound_mock(&mut functions, id, name, activation, &forbidden_invocations);
     }
-    handler.add_catalog(Catalog::from_json(catalog, common)?)?;
+    if activation {
+        let (id, name) = gated_function.ok_or("missing nested activation function")?;
+        let document = catalogs
+            .get_mut(id)
+            .ok_or("missing nested activation catalog")?;
+        let schema = &document["functions"][name];
+        if schema["allowedCallers"] != "rendererOrAgent"
+            || !matches!(
+                Catalog::from_json(document.clone(), common),
+                Err(CatalogError::InvalidCatalog(message)) if message.contains("Invalid requiresUserActivation")
+            )
+        {
+            return Err("expected catalog rejection for nested agent-callable activation".into());
+        }
+        document["functions"][name]["allowedCallers"] = json!("rendererOnly");
+    }
     if catalog_id != "basic" {
-        handler.add_catalog(Catalog::from_json(basic, common)?)?;
+        catalogs.entry(catalog_id).or_insert_with(
+            || json!({"protocolVersion": "1.0", "catalogId": catalog_id, "functions": {}}),
+        );
+    }
+    for document in catalogs.into_values() {
+        handler.add_catalog(Catalog::from_json(document, common)?)?;
     }
     let now = Instant::now();
     if let Some(id) = args["surfaceId"].as_str() {
@@ -429,33 +464,111 @@ fn execute_inbound(
             &functions,
         )?;
     }
-    let expect = case
-        .expect
-        .as_ref()
-        .ok_or("missing inbound RPC expectation")?;
-    match handler.receive_json(input, now, &functions) {
-        Ok(response) if expect.get("response").is_some() => {
-            assert_response(&expect["response"], &serde_json::to_value(response)?)?;
-        }
-        Err(error @ ReceiveError::Envelope { .. }) if expect.get("error").is_some() => {
-            let outbound = error.renderer_error().ok_or("missing correlated error")?;
-            let outbound = serde_json::to_value(outbound)?;
-            assert_error(&expect["error"], &outbound["error"])?;
-            if let Some(expect) = &case.expect_error {
-                if expect["category"] != "ValidationError"
-                    || expect["functionCallId"] != outbound["error"]["functionCallId"]
-                {
-                    return Err(format!("unexpected envelope error {error}").into());
-                }
-                assert_response(&expect["rendererError"], &outbound)?;
-            }
-        }
-        actual => return Err(format!("unexpected inbound outcome {actual:?}").into()),
+    let outcome = handler.receive_json(&input, now, &functions);
+    assert_inbound_outcome(case, &input, gated_function.map(|(_, name)| name), outcome)?;
+    if forbidden_invocations.get() != 0 {
+        return Err("inbound request invoked a forbidden function".into());
     }
     if handler.next_deadline().is_some() {
         return Err("inbound request left an agent call pending".into());
     }
     Ok(())
+}
+
+fn register_inbound_mock<'a>(
+    functions: &mut LocalFunctions<'a>,
+    id: &str,
+    name: &str,
+    activation: bool,
+    forbidden_invocations: &'a Cell<usize>,
+) {
+    match name {
+        "playMedia" => functions.insert(id, name, |args| {
+            args.get("mediaId")
+                .and_then(Value::as_str)
+                .ok_or("missing media ID")?;
+            Ok(json!({"playing": args.get("autoplay") == Some(&Value::Bool(true)), "timestamp": 0}))
+        }),
+        "echoArgs" => functions.insert(id, name, |args| Ok(Value::Object(args.clone()))),
+        "failingFunction" => functions.insert(id, name, |_| {
+            Err("An error occurred during function execution.".to_owned())
+        }),
+        "syncState" => functions.insert(id, name, |_| Ok(Value::Null)),
+        "agentSecret" if !activation => functions.insert(id, name, |_| Ok(json!("AGENT_OK"))),
+        "tagValue" => functions.insert(id, name, |args| {
+            Ok(json!(format!("tagged:{}", args["value"])))
+        }),
+        "agentSecret" | "openExternalUrl" | "secretRendererOnly" => {
+            functions.insert(id, name, move |_| {
+                forbidden_invocations.set(forbidden_invocations.get() + 1);
+                Ok(Value::Null)
+            });
+        }
+        _ => {}
+    }
+}
+
+fn assert_inbound_outcome(
+    case: &Case,
+    input: &Value,
+    gated_function: Option<&str>,
+    outcome: Result<Option<RendererToAgentMessage>, ReceiveError>,
+) -> Result<(), TestError> {
+    let expect = case
+        .expect
+        .as_ref()
+        .ok_or("missing inbound RPC expectation")?;
+    if let Some(name) = gated_function {
+        let actual = serde_json::to_value(outcome?)?;
+        let expected = json!({
+            "version": "1.0",
+            "rendererFunctionResponse": {
+                "functionCallId": input["callRendererFunction"]["functionCallId"],
+                "error": {
+                    "code": "INVALID_FUNCTION_CALL",
+                    "message": format!("Function '{name}' cannot be called by agent (allowedCallers is rendererOnly)."),
+                },
+            },
+        });
+        assert_response(&expected, &actual)?;
+    } else {
+        match outcome {
+            Ok(response) if expect.get("response").is_some() => {
+                assert_response(&expect["response"], &serde_json::to_value(response)?)?;
+            }
+            Err(error @ ReceiveError::Envelope { .. }) if expect.get("error").is_some() => {
+                let outbound = error.renderer_error().ok_or("missing correlated error")?;
+                let outbound = serde_json::to_value(outbound)?;
+                assert_error(&expect["error"], &outbound["error"])?;
+                if let Some(expect) = &case.expect_error {
+                    if expect["category"] != "ValidationError"
+                        || expect["functionCallId"] != outbound["error"]["functionCallId"]
+                    {
+                        return Err(format!("unexpected envelope error {error}").into());
+                    }
+                    assert_response(&expect["rendererError"], &outbound)?;
+                }
+            }
+            actual => return Err(format!("unexpected inbound outcome {actual:?}").into()),
+        }
+    }
+    Ok(())
+}
+
+// The upstream mock evaluates templates. Use the SDK function that does the same work.
+fn use_format_string(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(name) = object.get_mut("@call")
+                && *name == "renderTemplate"
+            {
+                *name = json!("formatString");
+            }
+            object.values_mut().for_each(use_format_string);
+        }
+        Value::Array(items) => items.iter_mut().for_each(use_format_string),
+        _ => {}
+    }
 }
 
 fn create_surface(

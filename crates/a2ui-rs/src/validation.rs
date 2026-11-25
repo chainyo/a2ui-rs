@@ -12,8 +12,8 @@ use crate::data_model::{self, DataError};
 use crate::expression::{Expression, is_identifier, parse_template};
 use crate::protocol::{
     AgentToRenderer, AgentToRendererMessage, Component, Components, ErrorTarget, FunctionCall,
-    GenericError, RendererCapabilities, RendererCapabilitiesV1, RendererDataModel, RendererError,
-    RendererToAgent, RendererToAgentMessage, UpdateDataModel, ValidationCode,
+    GenericError, Metadata, RendererCapabilities, RendererCapabilitiesV1, RendererDataModel,
+    RendererError, RendererToAgent, RendererToAgentMessage, UpdateDataModel, ValidationCode,
     ValidationError as ProtocolValidationError,
 };
 use crate::resolution::{
@@ -23,7 +23,9 @@ use crate::surface::{Surface, SurfaceError, SurfaceStore};
 
 const MAX_COMPONENT_DEPTH: usize = 50;
 const MAX_PAYLOAD_DEPTH: usize = 50;
-const MAX_FUNCTION_DEPTH: usize = 5;
+// The envelope, operation, components array, and component precede a property.
+const COMPONENT_PROPERTY_DEPTH: usize = 4;
+const OPERATION_FIELD_DEPTH: usize = 2;
 
 /// Controls which incomplete component graphs a renderer accepts.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -255,6 +257,16 @@ impl MessageProcessor {
                 if let Some(id) = create.catalog_id.as_deref() {
                     self.current_catalogs().require(Some(id))?;
                 }
+                if let Some(data) = &create.data_model {
+                    for value in data.values() {
+                        validate_nesting(
+                            value,
+                            OPERATION_FIELD_DEPTH + 1,
+                            ValidationError::DataModelDepth,
+                        )?;
+                    }
+                }
+                validate_metadata_nesting(create.metadata.as_ref(), OPERATION_FIELD_DEPTH)?;
                 if let Some(components) = &mut create.components {
                     let catalogs = self.current_catalogs();
                     catalogs.normalize_components(create.catalog_id.as_deref(), components)?;
@@ -285,7 +297,11 @@ impl MessageProcessor {
                 }
             }
             AgentToRenderer::UpdateDataModel(update) => {
-                validate_nesting(&update.value, false)?;
+                validate_nesting(
+                    &update.value,
+                    OPERATION_FIELD_DEPTH,
+                    ValidationError::DataModelDepth,
+                )?;
                 if self.get(&update.surface_id).is_none()
                     && let Err(source @ DataError::InvalidPointer(_)) =
                         data_model::parse_pointer(update.path.as_deref().unwrap_or("/"))
@@ -456,8 +472,13 @@ impl CatalogView<'_> {
                 });
             }
             for property in component.properties.values() {
-                validate_nesting(property, true)?;
+                validate_nesting(
+                    property,
+                    COMPONENT_PROPERTY_DEPTH,
+                    ValidationError::PayloadDepth,
+                )?;
             }
+            validate_metadata_nesting(component.metadata.as_ref(), COMPONENT_PROPERTY_DEPTH)?;
             let catalog = self.require(component.catalog_id.as_deref().or(default_catalog))?;
             let result = catalog.validate_component_at(component, Some(&base));
             match result {
@@ -483,6 +504,11 @@ impl CatalogView<'_> {
             if let Some(accessibility) = &component.accessibility {
                 let value = serde_json::to_value(accessibility)
                     .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
+                validate_nesting(
+                    &value,
+                    COMPONENT_PROPERTY_DEPTH,
+                    ValidationError::PayloadDepth,
+                )?;
                 self.validate_calls(
                     &value,
                     default_catalog,
@@ -557,8 +583,8 @@ impl CatalogView<'_> {
         depth: usize,
         path: &Location,
     ) -> Result<(), ValidationError> {
-        if depth >= MAX_FUNCTION_DEPTH {
-            return Err(ValidationError::FunctionDepth);
+        if depth >= MAX_PAYLOAD_DEPTH {
+            return Err(ValidationError::PayloadDepth);
         }
         validate_call_shape(call)
             .map_err(|error| ValidationError::InvalidCall(error.to_string()))?;
@@ -619,27 +645,33 @@ impl CatalogView<'_> {
     }
 }
 
-fn validate_nesting(value: &Value, expressions: bool) -> Result<(), ValidationError> {
-    let mut pending = vec![(value, 0, 0)];
-    while let Some((value, depth, calls)) = pending.pop() {
+fn validate_metadata_nesting(
+    metadata: Option<&Metadata>,
+    depth: usize,
+) -> Result<(), ValidationError> {
+    if let Some(extensions) = metadata.and_then(|metadata| metadata.extensions.as_ref()) {
+        for value in extensions.as_object().values() {
+            validate_nesting(value, depth + 2, ValidationError::PayloadDepth)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_nesting(
+    value: &Value,
+    depth: usize,
+    error: ValidationError,
+) -> Result<(), ValidationError> {
+    let mut pending = vec![(value, depth)];
+    while let Some((value, depth)) = pending.pop() {
         if depth > MAX_PAYLOAD_DEPTH {
-            return Err(if expressions {
-                ValidationError::PayloadDepth
-            } else {
-                ValidationError::DataModelDepth
-            });
+            return Err(error);
         }
         match value {
             Value::Object(object) => {
-                let calls = calls + usize::from(expressions && object.contains_key("@call"));
-                if calls > MAX_FUNCTION_DEPTH {
-                    return Err(ValidationError::FunctionDepth);
-                }
-                pending.extend(object.values().map(|value| (value, depth + 1, calls)));
+                pending.extend(object.values().map(|value| (value, depth + 1)));
             }
-            Value::Array(array) => {
-                pending.extend(array.iter().map(|value| (value, depth + 1, calls)));
-            }
+            Value::Array(array) => pending.extend(array.iter().map(|value| (value, depth + 1))),
             _ => {}
         }
     }
@@ -1057,7 +1089,7 @@ pub enum ValidationError {
         /// The path of the call in the message.
         path: String,
     },
-    /// A nested function call exceeds the function depth limit.
+    /// The former standalone function depth error, retained for API compatibility.
     #[error("Maximum functionCall depth exceeded")]
     FunctionDepth,
     /// The function call envelope is invalid.

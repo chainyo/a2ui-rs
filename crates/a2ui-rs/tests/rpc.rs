@@ -86,6 +86,72 @@ fn malformed_deletions_do_not_change_active_surfaces() -> Result<(), Box<dyn Err
 }
 
 #[test]
+fn inbound_rpc_checks_all_static_arguments_before_invoking_handlers() -> Result<(), Box<dyn Error>>
+{
+    let now = Instant::now();
+    let common = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/upstream/specification/v1_0/json/common_types.json");
+    let common = serde_json::from_slice(&fs::read(common)?)?;
+    let catalog = Catalog::from_json(
+        json!({
+            "protocolVersion": "1.0",
+            "catalogId": "example:warehouse",
+            "functions": {
+                "previewOrder": {"allowedCallers": "rendererOrAgent"},
+                "lookupStock": {"allowedCallers": "agentOnly"},
+                "confirmRestock": {"requiresUserActivation": true}
+            }
+        }),
+        &common,
+    )?;
+    let mut handler = RpcHandler::default();
+    handler.add_catalog(catalog)?;
+    let invocations = AtomicUsize::new(0);
+    let mut functions = LocalFunctions::default();
+    for name in ["previewOrder", "lookupStock", "confirmRestock"] {
+        functions.insert("example:warehouse", name, |_| {
+            invocations.fetch_add(1, Ordering::Relaxed);
+            Ok(Value::Null)
+        });
+    }
+    let too_deep = (0..51).fold(Value::Null, |value, _| json!([value]));
+    for (second, expected) in [
+        (
+            json!([{"restock": {"@call": "confirmRestock", "catalogId": "example:warehouse"}}]),
+            "INVALID_FUNCTION_CALL",
+        ),
+        (too_deep, "EXECUTION_ERROR"),
+    ] {
+        let request = json!({
+            "version": "1.0",
+            "callRendererFunction": {
+                "functionCallId": "preview-1",
+                "callFunction": {
+                    "@call": "previewOrder",
+                    "catalogId": "example:warehouse",
+                    "args": {
+                        "first": {"@call": "lookupStock", "catalogId": "example:warehouse"},
+                        "second": second
+                    }
+                }
+            }
+        });
+        let response = handler.receive_json(&request, now, &functions)?;
+        let response = serde_json::to_value(response)?;
+        assert_eq!(
+            response["rendererFunctionResponse"]["functionCallId"],
+            "preview-1"
+        );
+        assert_eq!(
+            response["rendererFunctionResponse"]["error"]["code"],
+            expected
+        );
+        assert_eq!(invocations.load(Ordering::Relaxed), 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn settles_concurrent_calls_and_cancels_only_the_deleted_surface() -> Result<(), Box<dyn Error>> {
     let now = Instant::now();
     let (mut handler, fixture) = setup(now)?;
