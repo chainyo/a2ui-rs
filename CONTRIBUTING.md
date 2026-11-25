@@ -72,11 +72,15 @@ mise run test-release
 
 Version tags identify SDK releases. They do not identify the A2UI protocol version.
 
-Verify the package archive with the Basic Catalog feature.
+Run the package check after the release tests.
 
 ```sh
-mise exec -- cargo package --package a2ui-rs --all-features --locked
+mise run package-smoke
 ```
+
+The check compares the README and license in the crate archive with the repository copies.
+It builds a consumer from the extracted archive with the default features and with `basic-catalog`.
+The consumer builds use the cached dependencies from the release tests.
 
 The archive omits integration tests that use fixtures from the repository.
 Create a release tag only when a release is explicitly requested.

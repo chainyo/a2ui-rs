@@ -16,6 +16,7 @@ description = "Run formatting, lint, build, and dependency checks"
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = [
   "actionlint",
+  "shellcheck .github/scripts/package-smoke.sh",
   "cargo fmt --all -- --check",
   "cargo check --workspace --all-targets --no-default-features --locked",
   "cargo check-all",
@@ -35,6 +36,10 @@ run = [
 description = "Run workspace tests and require v1.0 Core conformance coverage"
 env = { A2UI_REQUIRE_CORE_CONFORMANCE = "1" }
 run = "mise run test"
+
+[tasks.package-smoke]
+description = "Check the crate archive and build a package consumer"
+run = "bash .github/scripts/package-smoke.sh"
 
 [tasks.timing]
 description = "Measure message processor scaling with pinned upstream cases"
