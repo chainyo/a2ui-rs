@@ -92,17 +92,26 @@ impl DataScope {
     /// # Errors
     /// Returns an error for an invalid data path.
     pub fn collection(&self, data: &DataModel, path: &str) -> Result<Vec<Self>, DataError> {
+        Ok(self.collection_scopes(data, path)?.collect())
+    }
+
+    pub(crate) fn collection_scopes(
+        &self,
+        data: &DataModel,
+        path: &str,
+    ) -> Result<impl Iterator<Item = Self> + use<>, DataError> {
         let collection = self.resolve_path(path);
-        let Some(array) = data.get(&collection)?.and_then(Value::as_array) else {
-            return Ok(Vec::new());
-        };
-        let base = collection.trim_end_matches('/');
-        Ok((0..array.len())
-            .map(|index| Self {
+        let count = data
+            .get(&collection)?
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        Ok((0..count).map(move |index| {
+            let base = collection.trim_end_matches('/');
+            Self {
                 path: format!("{base}/{index}"),
                 index: Some(index),
-            })
-            .collect())
+            }
+        }))
     }
 }
 

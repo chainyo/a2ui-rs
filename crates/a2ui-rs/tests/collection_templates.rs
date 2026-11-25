@@ -6,8 +6,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use a2ui_rs::catalog::Catalog;
+use a2ui_rs::protocol::{ErrorTarget, RendererError, RendererToAgent, RendererToAgentMessage};
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
-use a2ui_rs::routing::{MountedNode, NodeChangeKind, NodeId, NodeWriteError, RoutingSession};
+use a2ui_rs::routing::{
+    MountedNode, NodeChangeKind, NodeId, NodeWriteError, RoutingSession, RoutingUpdate,
+};
 use a2ui_rs::rpc::RpcHandler;
 use serde_json::{Value, json};
 
@@ -141,6 +144,158 @@ fn an_action_can_change_collection_membership_in_one_advance() -> Result<(), Box
             .any(|change| change.id == removed && change.kind == NodeChangeKind::Disposed)
     );
     assert!(session.advance(now, None).nodes.is_empty());
+    Ok(())
+}
+
+#[test]
+fn bounds_a_wide_list_and_recovers_at_the_exact_limit() -> Result<(), Box<dyn Error>> {
+    let (mut session, now) = session()?;
+    let initial_shipments = children(&session, None)?;
+    let surface = "incoming";
+    session.mount_tree_with_budget(surface, 3);
+    session.mount_tree(surface);
+    session.receive(
+        serde_json::from_value(json!({
+            "version": "1.0",
+            "createSurface": {
+                "surfaceId": surface,
+                "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json",
+                "dataModel": {"orders": vec![json!({"status": "Incoming"}); 20_000]},
+                "components": [
+                    {"id": "root", "component": "Column", "children": {"componentId": "order", "path": "/orders"}},
+                    {"id": "order", "component": "Text", "text": {"@path": "status"}}
+                ]
+            }
+        }))?,
+        now,
+    )?;
+    let overflow = session.advance(now, None);
+    assert_budget_error(&overflow, surface, 3)?;
+    assert_eq!(overflow.nodes.len(), 3);
+    let tree = session.node_tree(surface).ok_or("missing tree")?;
+    assert!(tree.is_over_budget());
+    let root = tree
+        .root()
+        .and_then(|id| tree.node(id))
+        .ok_or("missing root")?;
+    let [first, second] = root.children.as_slice() else {
+        return Err("expected two order nodes".into());
+    };
+    let root_id = root.id;
+    let order_ids = [first.id, second.id];
+    assert_eq!(
+        tree.node(second.id).ok_or("missing order")?.scope.path(),
+        "/orders/1"
+    );
+    assert_eq!(children(&session, None)?, initial_shipments);
+    assert!(session.advance(now, None).errors.is_empty());
+
+    session.write_binding(
+        surface,
+        &DataScope::default(),
+        "/orders",
+        json!([{"status": "Packed"}, {"status": "Sent"}]),
+    )?;
+    assert!(session.advance(now, None).errors.is_empty());
+    let tree = session.node_tree(surface).ok_or("missing recovered tree")?;
+    assert!(!tree.is_over_budget());
+    assert_eq!(tree.root(), Some(root_id));
+    let root = tree.node(root_id).ok_or("missing recovered root")?;
+    assert_eq!(
+        root.children
+            .iter()
+            .map(|child| child.id)
+            .collect::<Vec<_>>(),
+        order_ids
+    );
+    assert_eq!(
+        tree.node(order_ids[1]).ok_or("missing order")?.properties["text"].value,
+        json!("Sent")
+    );
+    Ok(())
+}
+
+#[test]
+fn nested_collections_share_one_budget_and_mount_omitted_nodes_after_shrink()
+-> Result<(), Box<dyn Error>> {
+    let (mut session, now) = session()?;
+    let shipments = children(&session, None)?;
+    let old_bristol_fields = children(&session, Some(shipments[1]))?;
+    let removed_lines = old_bristol_fields[1];
+    let removed_tape = children(&session, Some(removed_lines))?[0];
+    session.mount_tree_with_budget(SURFACE, 8);
+    let overflow = session.advance(now, None);
+    assert_budget_error(&overflow, SURFACE, 8)?;
+    assert_eq!(children(&session, None)?, shipments);
+    assert_eq!(
+        children(&session, Some(shipments[1]))?,
+        old_bristol_fields[..1]
+    );
+    for id in [removed_lines, removed_tape] {
+        assert!(node(&session, id).is_err());
+        assert!(
+            overflow
+                .nodes
+                .iter()
+                .any(|change| change.id == id && change.kind == NodeChangeKind::Disposed)
+        );
+    }
+
+    session.write_binding(
+        SURFACE,
+        &DataScope::default(),
+        "/shipments",
+        json!([{"name": "London", "lines": []}, {"name": "Bristol", "lines": [{"name": "Tape"}]}]),
+    )?;
+    let recovered = session.advance(now, None);
+    assert!(recovered.errors.is_empty());
+    assert!(
+        !session
+            .node_tree(SURFACE)
+            .ok_or("missing tree")?
+            .is_over_budget()
+    );
+    assert_eq!(children(&session, None)?, shipments);
+    let bristol_fields = children(&session, Some(shipments[1]))?;
+    assert_eq!(bristol_fields[0], old_bristol_fields[0]);
+    let restored_lines = bristol_fields[1];
+    assert_ne!(restored_lines, removed_lines);
+    let restored_tape = children(&session, Some(restored_lines))?[0];
+    assert_ne!(restored_tape, removed_tape);
+    assert_eq!(
+        node(&session, restored_tape)?.properties["value"].value,
+        json!("Tape")
+    );
+    assert!(
+        recovered
+            .nodes
+            .iter()
+            .any(|change| change.id == restored_tape && change.kind == NodeChangeKind::Mounted)
+    );
+
+    session.write_binding(
+        SURFACE,
+        &DataScope::default(),
+        "/shipments/0/lines",
+        json!([{"name": "Labels"}]),
+    )?;
+    assert_budget_error(&session.advance(now, None), SURFACE, 8)?;
+    Ok(())
+}
+
+fn assert_budget_error(
+    update: &RoutingUpdate,
+    surface: &str,
+    limit: usize,
+) -> Result<(), Box<dyn Error>> {
+    let [RendererToAgentMessage::V1(RendererToAgent::Error(RendererError::Generic(error)))] =
+        update.errors.as_slice()
+    else {
+        return Err(format!("expected one budget error, got {:?}", update.errors).into());
+    };
+    assert_eq!(error.code, "MOUNTED_NODE_BUDGET_EXCEEDED");
+    assert_eq!(error.target, ErrorTarget::SurfaceId(surface.to_owned()));
+    assert!(error.message.contains(&limit.to_string()));
     Ok(())
 }
 

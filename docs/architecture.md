@@ -235,6 +235,17 @@ An update reports each change type once for a node.
 Removing a node also removes its descendants and their property evaluations.
 Use `unmount_tree` to stop tracking a surface.
 
+Each surface has a default budget of 10,000 mounted nodes.
+Use `mount_tree_with_budget` to set a different budget for a surface.
+The budget counts the root, placeholders, and all descendants.
+The session mounts nodes in depth-first order until it reaches the budget.
+If more nodes are available, `advance` reports `MOUNTED_NODE_BUDGET_EXCEEDED` for that surface.
+Use `NodeTree::is_over_budget` to read the current state.
+
+The error appears once for each period above the same budget.
+The session checks the tree again when the surface data, layout, or budget changes.
+When the tree fits again, the session mounts the remaining nodes and clears the over-budget state.
+
 Read the component's `@metadata` envelope from `MountedNode::metadata`.
 `NodeChangeKind::MetadataUpdated` reports a change to this envelope.
 An update that omits `@metadata` clears the node's metadata.

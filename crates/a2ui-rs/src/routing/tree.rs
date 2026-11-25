@@ -19,6 +19,8 @@ mod action;
 
 pub use action::{ActionDispatchOptions, NodeActionError};
 
+const DEFAULT_NODE_BUDGET: usize = 10_000;
+
 const VALIDATION_PROPERTIES: [&str; 3] = ["isValid", "validationErrors", "validationResults"];
 
 /// Identifies one mounted node in a routing session.
@@ -118,6 +120,9 @@ pub struct NodeTree {
     definitions: BTreeMap<String, Definition>,
     has_collections: bool,
     generation: u64,
+    budget: Option<usize>,
+    over_budget: bool,
+    reported_budget: Option<usize>,
     template_errors: BTreeMap<(NodeId, String), RoutingError>,
     reported_errors: BTreeMap<(NodeId, String), RoutingError>,
 }
@@ -133,6 +138,16 @@ impl NodeTree {
     #[must_use]
     pub fn node(&self, id: NodeId) -> Option<&MountedNode> {
         self.entries.get(&id).map(|entry| &entry.node)
+    }
+
+    /// Returns true if the latest tree update exceeded the mounted-node budget.
+    #[must_use]
+    pub fn is_over_budget(&self) -> bool {
+        self.over_budget
+    }
+
+    fn budget(&self) -> usize {
+        self.budget.unwrap_or(DEFAULT_NODE_BUDGET)
     }
 }
 
@@ -155,6 +170,7 @@ impl MountedTrees {
         self.dirty.remove(surface);
         if let Some(tree) = self.active.get_mut(surface) {
             let previous = std::mem::take(tree);
+            tree.budget = previous.budget;
             record_disposals(&mut self.changes, surface, previous.entries);
         }
     }
@@ -173,6 +189,21 @@ impl MountedTrees {
         update: &mut RoutingUpdate,
     ) {
         for (surface, tree) in &mut self.active {
+            let exceeded = tree.over_budget.then(|| tree.budget());
+            if exceeded != tree.reported_budget {
+                if let Some(limit) = exceeded {
+                    update.errors.push(
+                        RoutingError::new(
+                            "MOUNTED_NODE_BUDGET_EXCEEDED",
+                            format!(
+                                "Surface '{surface}' exceeds its mounted-node budget of {limit}"
+                            ),
+                        )
+                        .wire(surface),
+                    );
+                }
+                tree.reported_budget = exceeded;
+            }
             if tree.reported_errors != tree.template_errors {
                 update.errors.extend(
                     tree.template_errors
@@ -234,11 +265,27 @@ impl RoutingSession<'_> {
     /// Tracks the root and descendants of a surface.
     ///
     /// Call `advance` to mount the tree. A surface can arrive after this call.
+    /// A new tree has a budget of 10,000 nodes.
     pub fn mount_tree(&mut self, surface: &str) {
         if !self.trees.active.contains_key(surface) {
             self.trees
                 .active
                 .insert(surface.to_owned(), NodeTree::default());
+            self.trees.dirty.insert(surface.to_owned());
+        }
+    }
+
+    /// Tracks a surface with a mounted-node budget or changes its current budget.
+    ///
+    /// The budget counts the root, placeholders, and all descendants.
+    /// A budget of zero mounts no nodes.
+    /// The session keeps nodes in depth-first order until it reaches the budget.
+    /// The next `advance` reports `MOUNTED_NODE_BUDGET_EXCEEDED` if nodes do not fit.
+    /// The session tries again when the surface data, layout, or budget changes.
+    pub fn mount_tree_with_budget(&mut self, surface: &str, max_nodes: usize) {
+        let tree = self.trees.active.entry(surface.to_owned()).or_default();
+        if tree.budget != Some(max_nodes) {
+            tree.budget = Some(max_nodes);
             self.trees.dirty.insert(surface.to_owned());
         }
     }
@@ -339,6 +386,7 @@ impl RoutingSession<'_> {
                     .any(|child| child.collection.is_some())
             });
         }
+        let remaining = tree.budget();
         let mut reconcile = Reconcile {
             evaluations: &mut self.evaluations,
             next_evaluation: &mut self.next_id,
@@ -349,14 +397,18 @@ impl RoutingSession<'_> {
             previous: std::mem::take(&mut tree.entries),
             entries: BTreeMap::new(),
             errors: BTreeMap::new(),
+            remaining,
+            over_budget: false,
         };
         tree.root = reconcile.node("root", &DataScope::default(), None, tree.root, false);
         let Reconcile {
             entries,
             previous,
             errors,
+            over_budget,
             ..
         } = reconcile;
+        tree.over_budget = over_budget;
         tree.entries = entries;
         tree.template_errors = errors;
         if !tree.has_collections {
@@ -607,6 +659,8 @@ struct Reconcile<'a> {
     previous: BTreeMap<NodeId, Entry>,
     entries: BTreeMap<NodeId, Entry>,
     errors: BTreeMap<(NodeId, String), RoutingError>,
+    remaining: usize,
+    over_budget: bool,
 }
 
 impl Reconcile<'_> {
@@ -623,6 +677,11 @@ impl Reconcile<'_> {
             .definitions
             .get(component_id)
             .or_else(|| allow_pending.then_some(&pending))?;
+        if self.remaining == 0 {
+            self.over_budget = true;
+            return None;
+        }
+        self.remaining -= 1;
         let mut entry = old_id
             .filter(|id| {
                 self.previous.get(id).is_some_and(|entry| {
@@ -670,24 +729,31 @@ impl Reconcile<'_> {
 
         let mut children = Vec::new();
         for child in &definition.children {
+            if self.over_budget {
+                break;
+            }
             if let Some(path) = &child.collection {
-                match parent.node.scope.collection(self.data, path) {
+                match parent.node.scope.collection_scopes(self.data, path) {
                     Ok(scopes) => {
                         let mut old = previous
                             .remove(&(child.id.clone(), Some(child.field.clone())))
                             .unwrap_or_default();
-                        for (index, scope) in scopes.iter().enumerate() {
-                            if let Some(id) = self.node(
+                        for (index, scope) in scopes.enumerate() {
+                            let Some(id) = self.node(
                                 &child.id,
-                                scope,
+                                &scope,
                                 Some(&child.field),
                                 old.pop_front(),
                                 true,
-                            ) {
-                                children.push(MountedChild {
-                                    field: format!("{}[{index}]", child.field),
-                                    id,
-                                });
+                            ) else {
+                                break;
+                            };
+                            children.push(MountedChild {
+                                field: format!("{}[{index}]", child.field),
+                                id,
+                            });
+                            if self.over_budget {
+                                break;
                             }
                         }
                     }
