@@ -29,6 +29,8 @@ mod routing;
 mod rpc;
 #[path = "upstream/scaling.rs"]
 mod scaling;
+#[path = "upstream/schema.rs"]
+mod schemas;
 #[path = "upstream/validation.rs"]
 mod validation;
 
@@ -288,6 +290,7 @@ fn pending_after_execution(suite: &str, case: &Case) -> Option<&'static str> {
 fn supports_case(suite: &str, case: &Case) -> bool {
     if accessibility::supports(suite, case)
         || common_types::supports(suite, case)
+        || schemas::supports(suite, case)
         || events::supports(suite, case)
         || nodes::supports(suite, case)
         || validation::supports(suite, case)
@@ -336,6 +339,8 @@ fn execute_supported_case(upstream: &Path, suite: &str, case: &Case) -> Result<(
         accessibility::execute(upstream, case)
     } else if common_types::supports(suite, case) {
         common_types::execute(upstream, case)
+    } else if schemas::supports(suite, case) {
+        schemas::execute(upstream, case)
     } else if events::supports(suite, case) {
         events::execute(upstream, case)
     } else if nodes::supports(suite, case) {

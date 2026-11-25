@@ -41,6 +41,14 @@ Generic renderer errors contain exactly one surface or function correlation targ
 Reserved validation error codes require the validation error shape.
 Additional component and action properties cannot overwrite typed envelope fields during serialization.
 
+## Schema export
+
+Use `a2ui_rs::schema::common_types_schema` and `a2ui_rs::schema::agent_to_renderer_schema` to build the v1.0 JSON Schemas.
+Both functions return JSON Schema Draft 2020-12 documents.
+
+Register Common Types and the active catalog to resolve the references in the agent-to-renderer schema.
+Use `common_types.json` and `catalog.json` relative to the schema ID.
+
 ## Validation boundaries
 
 Component properties and function arguments depend on their catalog, so their values remain JSON data.

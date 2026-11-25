@@ -11,6 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+pub(crate) const IMPLICIT_SURFACE_COMPONENT: &str = "Surface";
+
 /// An arbitrary JSON object, used where the protocol permits application data.
 pub type JsonObject = Map<String, Value>;
 
@@ -583,14 +585,14 @@ impl Serialize for GenericError {
 
 fn component_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let name = String::deserialize(deserializer)?;
-    if name == "Surface" {
+    if name == IMPLICIT_SURFACE_COMPONENT {
         return Err(D::Error::custom("Surface is an implicit container"));
     }
     Ok(name)
 }
 
 fn serialize_component_name<S: Serializer>(name: &str, serializer: S) -> Result<S::Ok, S::Error> {
-    if name == "Surface" {
+    if name == IMPLICIT_SURFACE_COMPONENT {
         return Err(S::Error::custom("Surface is an implicit container"));
     }
     name.serialize(serializer)

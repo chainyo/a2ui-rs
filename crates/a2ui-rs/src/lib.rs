@@ -79,5 +79,6 @@ pub mod protocol;
 pub mod resolution;
 pub mod routing;
 pub mod rpc;
+pub mod schema;
 pub mod surface;
 pub mod validation;
