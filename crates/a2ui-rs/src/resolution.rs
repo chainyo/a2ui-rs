@@ -12,7 +12,6 @@ use crate::protocol::{Component, DataBinding, FunctionCall, JsonObject};
 use crate::surface::{Surface, SurfaceError};
 
 const MAX_DEPTH: usize = 50;
-const MAX_CALL_DEPTH: usize = 5;
 
 /// A location in the surface data model and its nearest collection index.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -235,6 +234,7 @@ pub(crate) struct Resolver<'a, 'f> {
     catalogs: CatalogView<'a>,
     functions: &'a LocalFunctions<'f>,
     properties: Option<&'a BTreeMap<*const Value, PropertyKind>>,
+    agent_rpc: bool,
 }
 
 impl<'a, 'f> Resolver<'a, 'f> {
@@ -263,7 +263,13 @@ impl<'a, 'f> Resolver<'a, 'f> {
             catalogs,
             functions,
             properties: None,
+            agent_rpc: false,
         }
+    }
+
+    pub(crate) fn for_agent_rpc(mut self) -> Self {
+        self.agent_rpc = true;
+        self
     }
 
     pub(crate) fn value(&self, scope: &DataScope, value: &Value) -> Result<Value, ResolveError> {
@@ -414,7 +420,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
         template_catalog: Option<&str>,
         depth: Nesting,
     ) -> Result<Value, ResolveError> {
-        let nested = depth.call()?;
+        let nested = depth.descend()?;
         validate_call_shape(&call)?;
         if call.name == "@index" {
             let index = scope.index.ok_or(ResolveError::IndexScope)?;
@@ -423,7 +429,11 @@ impl<'a, 'f> Resolver<'a, 'f> {
         }
 
         let catalog = self.catalog(call.catalog_id.as_deref().or(template_catalog))?;
-        if catalog.is_agent_only(&call.name) {
+        if self.agent_rpc {
+            if !catalog.function_schema(&call.name).is_null() {
+                check_agent_caller(catalog, &call.name)?;
+            }
+        } else if catalog.is_agent_only(&call.name) {
             return Err(ResolveError::AgentOnly(call.name));
         }
         if catalog.requires_activation(&call.name) {
@@ -444,7 +454,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
         name: &str,
         args: &JsonObject,
     ) -> Result<Value, ResolveError> {
-        self.invoke_local(scope, catalog_id, name, args, Nesting::default().call()?)
+        self.invoke_local(scope, catalog_id, name, args, Nesting::default().descend()?)
     }
 
     pub(crate) fn template_part(
@@ -457,7 +467,7 @@ impl<'a, 'f> Resolver<'a, 'f> {
             Expression::Literal(value) => value,
             Expression::Binding(path) => self.binding(scope, &path)?,
             Expression::Call(call) => {
-                self.call(scope, call, Some(catalog), Nesting::default().call()?)?
+                self.call(scope, call, Some(catalog), Nesting::default().descend()?)?
             }
         };
         Ok(to_text(&value))
@@ -476,8 +486,22 @@ impl<'a, 'f> Resolver<'a, 'f> {
                 .get("value")
                 .and_then(Value::as_str)
                 .ok_or(ResolveError::InvalidTemplate)?;
+            let parts = parse_template(template)?;
+            if self.agent_rpc {
+                for part in &parts {
+                    if let Expression::Call(call) = part {
+                        self.check_nested_caller(
+                            &call.name,
+                            call.catalog_id.as_deref().or(Some(catalog_id)),
+                        )?;
+                        if let Some(args) = &call.args {
+                            self.check_nested_arguments(args, Some(catalog_id), nested.descend()?)?;
+                        }
+                    }
+                }
+            }
             let mut output = String::new();
-            for part in parse_template(template)? {
+            for part in parts {
                 let result = match part {
                     Expression::Literal(value) => value,
                     Expression::Binding(path) => self.binding(scope, &path)?,
@@ -489,6 +513,13 @@ impl<'a, 'f> Resolver<'a, 'f> {
         } else {
             self.functions.invoke(catalog_id, name, args)
         }
+    }
+
+    pub(crate) fn check_rpc_arguments(&self, call: &FunctionCall) -> Result<(), ResolveError> {
+        if let Some(args) = &call.args {
+            self.check_nested_arguments(args, None, Nesting::default())?;
+        }
+        Ok(())
     }
 
     pub(crate) fn rpc_arguments(
@@ -503,6 +534,56 @@ impl<'a, 'f> Resolver<'a, 'f> {
             None,
             Nesting::default(),
         )
+    }
+
+    fn check_nested_arguments(
+        &self,
+        args: &JsonObject,
+        inherited_catalog: Option<&str>,
+        depth: Nesting,
+    ) -> Result<(), ResolveError> {
+        let mut pending: Vec<_> = args.values().map(|value| (value, depth)).collect();
+        let mut exceeded = false;
+        while let Some((value, depth)) = pending.pop() {
+            let Ok(nested) = depth.descend() else {
+                exceeded = true;
+                continue;
+            };
+            match value {
+                Value::Object(object) => {
+                    if let Some(name) = object.get("@call").and_then(Value::as_str)
+                        && !object.contains_key("@path")
+                    {
+                        let id = object
+                            .get("catalogId")
+                            .and_then(Value::as_str)
+                            .or(inherited_catalog);
+                        self.check_nested_caller(name, id)?;
+                        if let Some(args) = object.get("args").and_then(Value::as_object) {
+                            pending.extend(args.values().map(|value| (value, nested)));
+                        }
+                    } else {
+                        pending.extend(object.values().map(|value| (value, nested)));
+                    }
+                }
+                Value::Array(array) => pending.extend(array.iter().map(|value| (value, nested))),
+                _ => {}
+            }
+        }
+        if exceeded {
+            Err(ResolveError::Depth)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_nested_caller(&self, name: &str, catalog: Option<&str>) -> Result<(), ResolveError> {
+        if let Ok(catalog) = self.catalog(catalog)
+            && !catalog.function_schema(name).is_null()
+        {
+            check_agent_caller(catalog, name)?;
+        }
+        Ok(())
     }
 
     fn catalog_arguments(
@@ -537,6 +618,16 @@ impl<'a, 'f> Resolver<'a, 'f> {
             |args| self.object(scope, args, template_catalog, depth),
         )
     }
+}
+
+pub(crate) fn check_agent_caller(catalog: &Catalog, name: &str) -> Result<(), ResolveError> {
+    if !matches!(
+        catalog.function_schema(name)["allowedCallers"].as_str(),
+        Some("rendererOrAgent" | "agentOnly")
+    ) {
+        return Err(ResolveError::RendererOnly(name.to_owned()));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_call_shape(call: &FunctionCall) -> Result<(), ResolveError> {
@@ -634,31 +725,14 @@ fn to_number(value: Value) -> Value {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Nesting {
-    value: usize,
-    calls: usize,
-}
+struct Nesting(usize);
 
 impl Nesting {
     fn descend(self) -> Result<Self, ResolveError> {
-        if self.value >= MAX_DEPTH {
+        if self.0 >= MAX_DEPTH {
             Err(ResolveError::Depth)
         } else {
-            Ok(Self {
-                value: self.value + 1,
-                ..self
-            })
-        }
-    }
-
-    fn call(self) -> Result<Self, ResolveError> {
-        if self.calls >= MAX_CALL_DEPTH {
-            Err(ResolveError::FunctionDepth)
-        } else {
-            Ok(Self {
-                calls: self.calls + 1,
-                ..self.descend()?
-            })
+            Ok(Self(self.0 + 1))
         }
     }
 }
@@ -693,6 +767,9 @@ pub enum ResolveError {
     /// The function can only run when the agent calls it.
     #[error("Function '{0}' cannot be called by renderer (agentOnly)")]
     AgentOnly(String),
+    /// The function can only run when the renderer calls it.
+    #[error("Function '{0}' cannot be called by agent (allowedCallers is rendererOnly).")]
+    RendererOnly(String),
     /// The function needs a user action.
     #[error("Function '{0}' requires user activation")]
     UserActivation(String),
@@ -725,7 +802,7 @@ pub enum ResolveError {
     /// The value or component exceeds the nesting limit.
     #[error("Global recursion limit exceeded during resolution")]
     Depth,
-    /// The call exceeds the function nesting limit.
+    /// The former standalone function depth error, retained for API compatibility.
     #[error("Maximum functionCall depth exceeded")]
     FunctionDepth,
 }

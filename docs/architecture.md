@@ -180,6 +180,9 @@ Disposal cancels all pending calls and closes the session.
 
 The handler resolves arguments in the named surface. A renderer call without a surface uses an empty data model.
 The handler checks catalog permissions before it calls a renderer function.
+It checks static nested calls before it evaluates the arguments.
+It also checks calls in templates during evaluation.
+Nested calls use the agent's caller permissions for the full request.
 An agent cannot invoke a function that requires user activation.
 Use `CallOptions` to mark a renderer-initiated call that comes from an active user gesture.
 

@@ -165,7 +165,19 @@ pub(super) fn execute(upstream: &Path, suite: &str, case: &Case) -> Result<(), T
                 .map_or(Ok(()), |expect| assert_state(&processor, expect))
         });
     }
-    execute_validation_steps(&mut processor, case, checks)
+    execute_validation_steps(&mut processor, case, checks)?;
+    let expected_text = match case.name.as_str() {
+        "test_v10_nested_function_calls_within_global_depth" => "Six calls deep",
+        "test_v10_nested_function_calls_at_global_depth_limit" => "Twenty-three calls deep",
+        _ => return Ok(()),
+    };
+    let tree = processor
+        .resolve_components("s1", &LocalFunctions::default())?
+        .ok_or("missing root component for depth fixture")?;
+    if tree.properties.get("text") != Some(&json!(expected_text)) {
+        return Err(format!("expected {expected_text:?}, got {:?}", tree.properties).into());
+    }
+    Ok(())
 }
 
 fn register_fixture_catalogs(

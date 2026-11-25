@@ -178,7 +178,8 @@ The harness verifies catalog rejection and keeps the dispatch assertion pending.
 
 The v1.0 catalog schema requires `rendererOnly` for functions that require user activation.
 The RPC activation fixtures supply `rendererOrAgent` for those functions.
-The harness checks catalog rejection, RPC denial, and gesture handling through a local renderer action.
+The harness checks catalog rejection and RPC denial for direct and nested calls.
+It also checks gesture handling through a local renderer action.
 
 Use renderer actions to test execution with and without a gesture.
 Use a renderer RPC case to test denial of a `rendererOnly` function.
