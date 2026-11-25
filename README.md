@@ -8,40 +8,43 @@ A headless Rust SDK for [A2UI](https://a2ui.org/) v1.0. Use it to validate messa
 
 ## Quick start
 
-Add the SDK and the JSON library used in this example.
+Add the SDK to your Cargo project.
 
 ```sh
-cargo add a2ui-rs serde_json
+cargo add a2ui-rs
 ```
 
-Create a surface, apply a data update, and read the updated value.
+Use typed messages to create a surface and update its data.
 
 ```rust
-use a2ui_rs::validation::MessageProcessor;
-use serde_json::json;
+use a2ui_rs::{
+    protocol::{AgentToRenderer, AgentToRendererMessage, CreateSurface, UpdateDataModel},
+    validation::MessageProcessor,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let surface_id = "contact";
     let mut processor = MessageProcessor::default();
-    processor.apply_json(&json!([
-        {
-            "version": "1.0",
-            "createSurface": {
-                "surfaceId": "contact",
-                "dataModel": { "name": "Sam" }
-            }
-        },
-        {
-            "version": "1.0",
-            "updateDataModel": {
-                "surfaceId": "contact",
-                "path": "/name",
-                "value": "Riley"
-            }
-        }
-    ]))?;
+    let create = CreateSurface {
+        surface_id: surface_id.into(),
+        catalog_id: None,
+        send_data_model: None,
+        components: None,
+        data_model: Some([("name".into(), "Sam".into())].into_iter().collect()),
+        metadata: None,
+    };
+    processor.apply(AgentToRendererMessage::V1(AgentToRenderer::CreateSurface(create)))?;
 
-    let contact = processor.get("contact").ok_or("Missing contact surface")?;
-    assert_eq!(contact.data_model().get("/name")?, Some(&json!("Riley")));
+    let update = UpdateDataModel {
+        surface_id: surface_id.into(),
+        path: Some("/name".into()),
+        value: "Riley".into(),
+    };
+    processor.apply(AgentToRendererMessage::V1(AgentToRenderer::UpdateDataModel(update)))?;
+
+    let contact = processor.get(surface_id).ok_or("Missing contact surface")?;
+    let name = contact.data_model().get("/name")?.and_then(|value| value.as_str());
+    assert_eq!(name, Some("Riley"));
     Ok(())
 }
 ```
