@@ -31,6 +31,11 @@ run = [
   "cargo test --workspace --all-features --doc --locked",
 ]
 
+[tasks.test-release]
+description = "Run workspace tests and require v1.0 Core conformance coverage"
+env = { A2UI_REQUIRE_CORE_CONFORMANCE = "1" }
+run = "mise run test"
+
 [tasks.timing]
 description = "Measure message processor scaling with pinned upstream cases"
 run = "cargo test --release --package a2ui-rs --features basic-catalog --test upstream --locked upstream_processor_scaling -- --ignored --nocapture"

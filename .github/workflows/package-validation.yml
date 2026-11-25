@@ -35,8 +35,8 @@ jobs:
           version: 2026.11.6
           install_args: --locked
           cache_key_prefix: mise-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Test workspace
-        run: mise run test
+      - name: Test workspace and require Core conformance
+        run: mise run test-release
   processor-scaling:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
