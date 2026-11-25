@@ -59,7 +59,7 @@ cargo add a2ui-rs --features basic-catalog
 
 Load the Basic Catalog schema and register the functions your app needs. [Basic Catalog setup](https://github.com/chainyo/a2ui-rs/blob/main/docs/architecture.md#basic-catalog-functions)
 
-## Headless example
+## Headless examples
 
 Run the contact form example from a repository checkout.
 
@@ -68,6 +68,15 @@ mise exec -- cargo run --locked --package a2ui-rs --example headless_form
 ```
 
 The example mounts a tree, writes through a field binding, and prints the action with the updated value. [Example source](https://github.com/chainyo/a2ui-rs/tree/main/crates/a2ui-rs/examples/headless_form)
+
+Run the transport example to see surface updates, an action, and an agent RPC with its reply.
+The example forwards renderer errors and advances the clock to an unanswered RPC deadline.
+
+```sh
+mise exec -- cargo run --locked --package a2ui-rs --example headless_transport
+```
+
+[Transport example source](https://github.com/chainyo/a2ui-rs/tree/main/crates/a2ui-rs/examples/headless_transport)
 
 ## Documentation
 
