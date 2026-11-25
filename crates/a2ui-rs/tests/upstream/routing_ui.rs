@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use a2ui_basic_catalog::{register_open_url, register_validation_functions};
+use a2ui_rs::basic_catalog::{register_open_url, register_validation_functions};
 use a2ui_rs::catalog::Catalog;
 use a2ui_rs::resolution::{DataScope, LocalFunctions};
 use a2ui_rs::routing::{EvaluationId, EvaluationState, RoutingSession};

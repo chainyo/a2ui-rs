@@ -17,9 +17,10 @@ env = { RUSTDOCFLAGS = "-D warnings" }
 run = [
   "actionlint",
   "cargo fmt --all -- --check",
+  "cargo check --workspace --all-targets --no-default-features --locked",
   "cargo check-all",
   "cargo clippy-all",
-  "cargo doc --workspace --no-deps --locked",
+  "cargo doc --workspace --all-features --no-deps --locked",
   "cargo deny --locked check",
 ]
 
@@ -27,9 +28,9 @@ run = [
 description = "Run integration and documentation tests"
 run = [
   "cargo test-all",
-  "cargo test --workspace --doc --locked",
+  "cargo test --workspace --all-features --doc --locked",
 ]
 
 [tasks.timing]
 description = "Measure message processor scaling with pinned upstream cases"
-run = "cargo test --release --package a2ui-rs --test upstream --locked upstream_processor_scaling -- --ignored --nocapture"
+run = "cargo test --release --package a2ui-rs --features basic-catalog --test upstream --locked upstream_processor_scaling -- --ignored --nocapture"

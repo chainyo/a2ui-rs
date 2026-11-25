@@ -9,18 +9,64 @@ repository.workspace = true
 publish = false
 exclude = ["/tests"]
 
+[package.metadata.docs.rs]
+features = ["basic-catalog"]
+
 [lints]
 workspace = true
 
+[features]
+default = []
+basic-catalog = [
+  "dep:fancy-regex",
+  "dep:fixed_decimal",
+  "dep:icu_calendar",
+  "dep:icu_datetime",
+  "dep:icu_decimal",
+  "dep:icu_experimental",
+  "dep:icu_locale_core",
+  "dep:icu_plurals",
+  "dep:icu_provider",
+  "dep:jiff",
+  "dep:url",
+  "dep:writeable",
+]
+
 [dependencies]
+fancy-regex = { workspace = true, optional = true }
+fixed_decimal = { workspace = true, optional = true }
+icu_calendar = { workspace = true, optional = true }
+icu_datetime = { workspace = true, optional = true }
+icu_decimal = { workspace = true, optional = true }
+icu_experimental = { workspace = true, optional = true }
+icu_locale_core = { workspace = true, optional = true }
+icu_plurals = { workspace = true, optional = true }
+icu_provider = { workspace = true, optional = true }
+jiff = { workspace = true, optional = true }
 jsonschema.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 unicode-ident.workspace = true
+url = { workspace = true, optional = true }
+writeable = { workspace = true, optional = true }
 
 [dev-dependencies]
-a2ui-basic-catalog.workspace = true
-jiff.workspace = true
 serde-saphyr.workspace = true
+
+[[test]]
+name = "basic_formatting"
+required-features = ["basic-catalog"]
+
+[[test]]
+name = "basic_open_url"
+required-features = ["basic-catalog"]
+
+[[test]]
+name = "basic_validation"
+required-features = ["basic-catalog"]
+
+[[test]]
+name = "upstream"
+required-features = ["basic-catalog"]

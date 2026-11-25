@@ -133,26 +133,29 @@ The snapshot expands collection templates and keeps actions for event dispatch.
 Read a new snapshot after the surface data changes.
 
 Register renderer function handlers with `LocalFunctions::insert`.
-Add the `a2ui-basic-catalog` crate to use the Basic Catalog function implementations.
-Use `a2ui_basic_catalog::register_validation_functions` for the v1.0 Basic Catalog.
+Use the catalog ID and function name for each registration.
+The processor checks calls against the catalog schemas before it invokes handlers.
+The SDK evaluates `formatString` and the collection function `@index`.
+Calls in a `formatString` template use its catalog. The system function `@index` uses the nearest collection scope.
+
+## Basic Catalog functions
+
+Enable the `basic-catalog` feature to use the `a2ui_rs::basic_catalog` module.
+Load the v1.0 Basic Catalog schema in Core before you register its functions.
+Use `basic_catalog::register_validation_functions` to register validators and boolean functions.
 It registers `required`, `email`, `numeric`, `length`, `regex`, `and`, `or`, and `not`.
 `numeric` compares the resolved `DynamicNumber` with inclusive bounds.
 The protocol converts an invalid numeric binding to zero.
 `length` counts Unicode code points in the resolved string.
 `regex` checks the A2UI dialect and safety rules before it matches a value.
 
-Use `a2ui_basic_catalog::register_formatting_functions` for `formatNumber`, `formatCurrency`, `formatDate`, and `pluralize`.
+Use `basic_catalog::register_formatting_functions` for `formatNumber`, `formatCurrency`, `formatDate`, and `pluralize`.
 Set a BCP 47 locale and an IANA time zone with `FormattingOptions::new`.
 The locale controls the number and currency formats, date names, and plural rules.
 `formatCurrency` uses two decimal places when the call omits `decimals`.
 `formatDate` uses the configured time zone for epoch values and date strings without an offset.
 If a date string has an offset, `formatDate` uses that offset.
 The `ISO` format gives the timestamp in UTC with three fractional digits.
-
-Use the catalog ID and function name for each registration.
-The processor checks calls against the catalog schemas before it invokes handlers.
-The SDK evaluates `formatString` and the collection function `@index`.
-Calls in a `formatString` template use its catalog. The system function `@index` uses the nearest collection scope.
 
 ## Bidirectional RPC
 
@@ -206,7 +209,7 @@ The session applies a successful function's writes before it runs the next step.
 If a function fails, the action stops. The session keeps the writes from earlier successful functions.
 Event context entries resolve in order. An error stops the event before dispatch.
 
-Use `a2ui_basic_catalog::register_open_url` to give the Basic Catalog a host callback.
+Use `basic_catalog::register_open_url` to give the Basic Catalog a host callback.
 The SDK accepts absolute URLs with the `http`, `https`, `mailto`, and `tel` schemes.
 The callback receives the parsed URL. A successful call completes without a value or an agent action event.
 Call `advance` during the user gesture to run the callback.

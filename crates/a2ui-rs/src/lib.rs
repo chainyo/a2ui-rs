@@ -71,6 +71,8 @@ pub struct UnsupportedVersion {
     version: String,
 }
 
+#[cfg(feature = "basic-catalog")]
+pub mod basic_catalog;
 pub mod catalog;
 pub mod data_model;
 pub mod expression;
