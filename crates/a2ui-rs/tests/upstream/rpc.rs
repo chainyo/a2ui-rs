@@ -87,7 +87,7 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     let common = read_json(upstream, "specification/v1_0/json/common_types.json")?;
     let basic = read_json(upstream, "catalogs/basic/v1/catalog.json")?;
     if activation_fixture("core/rpc_functions.yaml", case) {
-        return execute_activation(case, args, &common);
+        return execute_activation(upstream, case, args, &common);
     }
     if case.name == "test_rpc_call_renderer_function_protocol_version_mismatch" {
         return execute_incompatible_catalog(case, args, &common);
@@ -193,7 +193,12 @@ fn read_json(upstream: &Path, file: &str) -> Result<Value, TestError> {
     Ok(serde_json::from_slice(&fs::read(upstream.join(file))?)?)
 }
 
-fn execute_activation(case: &Case, args: &Value, common: &Value) -> Result<(), TestError> {
+fn execute_activation(
+    upstream: &Path,
+    case: &Case,
+    args: &Value,
+    common: &Value,
+) -> Result<(), TestError> {
     let activated = args["userActivationPresent"]
         .as_bool()
         .ok_or("missing activation flag")?;
@@ -210,11 +215,16 @@ fn execute_activation(case: &Case, args: &Value, common: &Value) -> Result<(), T
         "protocolVersion": "1.0", "catalogId": id,
         "functions": { (name): {
             "type": "object", "returnType": "object",
-            "properties": {"args": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            "properties": {
+                "@call": {"const": name},
+                "args": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
+            },
+            "required": ["@call", "args"],
             "requiresUserActivation": meta["requiresUserActivation"],
             "allowedCallers": meta["allowedCallers"],
         }},
     });
+    assert_activation_schema(upstream, &document["functions"][name])?;
     if !matches!(
         Catalog::from_json(document.clone(), common),
         Err(CatalogError::InvalidCatalog(message)) if message.contains("Invalid requiresUserActivation")
@@ -280,6 +290,35 @@ fn execute_activation(case: &Case, args: &Value, common: &Value) -> Result<(), T
     {
         return Err("expected the local action to fail without a user gesture".into());
     }
+    Ok(())
+}
+
+fn assert_activation_schema(upstream: &Path, fixture: &Value) -> Result<(), TestError> {
+    let schema = read_json(upstream, "specification/v1_0/json/catalog_definition.json")?;
+    let validator = jsonschema::validator_for(&json!({
+        "$schema": schema["$schema"],
+        "$defs": {
+            "FunctionDefinition": schema["$defs"]["FunctionDefinition"],
+            "FunctionCallValidationSchema": schema["$defs"]["FunctionCallValidationSchema"],
+        },
+        "$ref": "#/$defs/FunctionDefinition",
+    }))?;
+    if fixture["requiresUserActivation"] != true
+        || fixture["allowedCallers"] != "rendererOrAgent"
+        || validator.is_valid(fixture)
+    {
+        return Err("expected the pinned schema to reject the fixture's activation policy".into());
+    }
+    let mut control = fixture.clone();
+    control["requiresUserActivation"] = json!(false);
+    validator
+        .validate(&control)
+        .map_err(|error| format!("expected an ungated agent-callable function: {error}"))?;
+    control["requiresUserActivation"] = json!(true);
+    control["allowedCallers"] = json!("rendererOnly");
+    validator
+        .validate(&control)
+        .map_err(|error| format!("expected an activation-gated renderer function: {error}"))?;
     Ok(())
 }
 

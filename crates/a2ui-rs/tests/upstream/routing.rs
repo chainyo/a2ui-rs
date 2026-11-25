@@ -44,9 +44,6 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         }
         return ui::execute_local_action(upstream, case);
     }
-    if non_json_argument_fixture("core/agent_function_routing.yaml", case) {
-        return assert_non_json_arguments(case);
-    }
     let mut session = build_session(upstream, case)?;
     let now = Instant::now();
     let mut create = json!({"surfaceId": "main", "dataModel": case.data_model.clone().unwrap_or_else(|| json!({}))});
@@ -89,6 +86,9 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
         calls: Vec::new(),
         observed: Vec::new(),
     };
+    if non_json_argument_fixture("core/agent_function_routing.yaml", case) {
+        return assert_non_json_arguments(case, &mut driver);
+    }
     for (index, step) in case.steps.iter().enumerate() {
         let context = ordered
             .as_ref()
@@ -102,7 +102,7 @@ pub(super) fn execute(upstream: &Path, case: &Case) -> Result<(), TestError> {
     Ok(())
 }
 
-fn assert_non_json_arguments(case: &Case) -> Result<(), TestError> {
+fn assert_non_json_arguments(case: &Case, driver: &mut Driver) -> Result<(), TestError> {
     let [binding, action] = case.steps.as_slice() else {
         return Err("expected a binding and a function action".into());
     };
@@ -112,7 +112,7 @@ fn assert_non_json_arguments(case: &Case) -> Result<(), TestError> {
     {
         return Err("unexpected non-finite fixture steps".into());
     }
-    for (step, literal) in [(binding, "NaN"), (action, "Infinity")] {
+    for (step, literal, finite) in [(binding, "NaN", 123), (action, "Infinity", 124)] {
         let call = &step["evaluate"];
         let name = call["@call"].as_str().ok_or("missing function name")?;
         let token = call["args"]["amount"]
@@ -139,10 +139,22 @@ fn assert_non_json_arguments(case: &Case) -> Result<(), TestError> {
         })
         .to_string();
         serde_json::from_str::<RendererToAgentMessage>(&wire)?;
-        let invalid = wire.replace(r#""amount":123"#, &format!(r#""amount":{literal}"#));
-        if serde_json::from_str::<RendererToAgentMessage>(&invalid).is_ok() {
-            return Err(format!("accepted an RPC argument with no JSON form: {literal}").into());
+        for invalid in [literal, "1e400"] {
+            let invalid_wire = wire.replace(r#""amount":123"#, &format!(r#""amount":{invalid}"#));
+            if serde_json::from_str::<RendererToAgentMessage>(&invalid_wire).is_ok() {
+                return Err(
+                    format!("accepted an RPC argument with no JSON form: {invalid}").into(),
+                );
+            }
         }
+        driver.step(
+            &json!({
+                "evaluate": {"@call": name, "args": {"amount": finite}},
+                "as": step["as"],
+                "expectOutbound": [{"@call": name, "catalogId": catalog, "args": {"amount": finite}}],
+            }),
+            None,
+        )?;
     }
     Ok(())
 }
