@@ -1,0 +1,32 @@
+{
+  "catalogId": "https://example.com/shipment-catalog.json",
+  "protocolVersion": "1.0",
+  "components": {
+    "Shipment": {
+      "type": "object",
+      "properties": {
+        "estimate": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "action": { "$ref": "common_types.json#/$defs/Action" }
+      },
+      "required": ["estimate", "action"]
+    }
+  },
+  "functions": {
+    "estimateDelivery": {
+      "type": "object",
+      "returnType": "string",
+      "allowedCallers": "rendererOnly",
+      "properties": {
+        "args": {
+          "type": "object",
+          "properties": {
+            "destination": { "$ref": "common_types.json#/$defs/DynamicString" }
+          },
+          "required": ["destination"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["args"]
+    }
+  }
+}
