@@ -37,6 +37,9 @@ jobs:
           cache_key_prefix: mise-${{ hashFiles('rust-toolchain.toml') }}
       - name: Test workspace and require Core conformance
         run: mise run test-release
+      - name: Check the packaged crate
+        if: runner.os == 'Linux'
+        run: mise run package-smoke
   processor-scaling:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
