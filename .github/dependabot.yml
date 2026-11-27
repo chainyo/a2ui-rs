@@ -24,7 +24,8 @@ updates:
   - package-ecosystem: gitsubmodule
     directory: /
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 9 * * *"
     assignees:
       - chainyo
     commit-message:
