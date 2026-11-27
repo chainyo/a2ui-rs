@@ -216,7 +216,7 @@ Keep the order, warning, and length fallback assertions.
 
 ## Updates
 
-Dependabot checks the submodule weekly and opens a pull request for an updated pin.
+Dependabot checks the submodule each day and opens a pull request for an updated pin.
 The branch setting in `.gitmodules` selects the upstream branch for update proposals.
 Initialization uses the commit recorded in the parent repository.
 
